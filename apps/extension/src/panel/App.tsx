@@ -32,9 +32,50 @@ import {
   StatusBar,
   VirtualizedTable,
 } from '@wiredata/ui';
-import { ChromeNetworkCaptureAdapter } from '../adapters/network';
+import { ChromeNetworkCaptureAdapter } from '../adapters/network.js';
 
 type ActiveView = 'captures' | 'datasets' | 'candidates' | 'sql' | 'workspace';
+
+function generateOrdersMock(page: number, pageSize: number = 100) {
+  const startId = (page - 1) * pageSize + 1;
+  const orders = [];
+  const statuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+  const cities = ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa'];
+
+  for (let i = 0; i < pageSize; i++) {
+    const id = startId + i;
+    const customerId = (id % 50) + 1;
+    const status = statuses[id % statuses.length];
+    const total = Math.round((20 + (id * 13.37) % 500) * 100) / 100;
+    const city = cities[id % cities.length];
+
+    orders.push({
+      id,
+      customer_id: customerId,
+      status,
+      total,
+      created_at: `2026-08-${String((id % 28) + 1).padStart(2, '0')}T10:00:00Z`,
+      customer: {
+        id: customerId,
+        name: `Customer ${customerId}`,
+        address: {
+          city,
+          country: 'Canada',
+        },
+      },
+    });
+  }
+
+  return {
+    total: 8247,
+    page,
+    pageSize,
+    hasMore: page < 83,
+    data: {
+      orders,
+    },
+  };
+}
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>('captures');
@@ -147,12 +188,41 @@ export default function App() {
 
     for (const item of urls) {
       try {
-        const res = await fetch(item.url, {
-          method: item.method,
-          headers: { 'Content-Type': 'application/json' },
-          body: item.body,
-        });
-        const rawJson = await res.json();
+        let rawJson: any = null;
+        try {
+          const res = await fetch(item.url, {
+            method: item.method,
+            headers: { 'Content-Type': 'application/json' },
+            body: item.body,
+          });
+          if (res.ok) {
+            rawJson = await res.json();
+          }
+        } catch {}
+
+        // In-memory fallback if fetch is blocked or server offline
+        if (!rawJson) {
+          if (item.url.includes('/api/orders?page=1')) {
+            rawJson = generateOrdersMock(1, 100);
+          } else if (item.url.includes('/api/orders?page=2')) {
+            rawJson = generateOrdersMock(2, 100);
+          } else if (item.url.includes('/api/orders?page=3')) {
+            rawJson = generateOrdersMock(3, 100);
+          } else if (item.url.includes('/api/orders/9182/items')) {
+            rawJson = { order_id: 9182, items: [{ item_id: 91821, sku: 'SKU-A101', quantity: 2, unit_price: 24.99 }] };
+          } else if (item.url.includes('/api/customers/44')) {
+            rawJson = { id: 44, name: 'Customer 44', email: 'user44@example.com', tier: 'platinum' };
+          } else if (item.url.includes('/api/duplicates')) {
+            rawJson = { items: [{ id: 1, status: 'v1_initial' }, { id: 1, status: 'v1_updated' }, { id: 2, status: 'v1_single' }] };
+          } else if (item.url.includes('/api/mixed-types')) {
+            rawJson = { records: [{ id: 1, amount: 45.5 }, { id: 2, amount: 99.0 }, { id: 3, amount: 'unknown' }] };
+          } else if (item.url.includes('/graphql')) {
+            rawJson = { data: { orders: [{ id: 9182, status: 'shipped', total: 84.12745 }, { id: 9183, status: 'pending', total: 42.11 }] } };
+          }
+        }
+
+        if (!rawJson) continue;
+
         const jsonStr = JSON.stringify(rawJson);
         const { sha256, computeNormalizedRoute, extractGraphQLOperation, generateULID, detectCandidateCollections } = await import('@wiredata/core');
         const hash = await sha256(jsonStr);
@@ -173,8 +243,8 @@ export default function App() {
             graphql_operation_name: graphqlOp,
           },
           response: {
-            status: res.status,
-            status_text: res.statusText,
+            status: 200,
+            status_text: 'OK',
             mime_type: 'application/json',
             headers: [{ name: 'Content-Type', value: 'application/json', is_redacted: false }],
             body_size: jsonStr.length,

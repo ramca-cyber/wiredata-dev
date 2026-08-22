@@ -64,6 +64,9 @@ export async function handleMockRequest(req: MockHttpRequest): Promise<MockHttpR
   const jsonHeaders = {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': '*',
   };
 
   // GET /api/orders

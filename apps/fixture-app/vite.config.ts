@@ -6,10 +6,19 @@ import { handleMockRequest } from './src/mock-server';
 function mockApiPlugin(): Plugin {
   return {
     name: 'mock-api-plugin',
-    configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url || '';
         if (url.startsWith('/api/') || url.startsWith('/graphql')) {
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+          res.setHeader('Access-Control-Allow-Headers', '*');
+
+          if (req.method === 'OPTIONS') {
+            res.statusCode = 204;
+            res.end();
+            return;
+          }
+
           let body = '';
           req.on('data', chunk => (body += chunk));
           req.on('end', async () => {
@@ -36,7 +45,6 @@ function mockApiPlugin(): Plugin {
         }
         next();
       });
-    },
   };
 }
 
