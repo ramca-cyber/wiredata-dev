@@ -1,9 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { WorkbenchApp } from '../workbench/WorkbenchApp.js';
+import { SidePanelApp } from './SidePanelApp.js';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <WorkbenchApp hostMode="devtools" />
+    <SidePanelApp />
   </React.StrictMode>
 );

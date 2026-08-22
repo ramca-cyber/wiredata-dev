@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Network Data Workbench</title>
+    <title>WireData Side Panel</title>
     <style>
       * {
         box-sizing: border-box;
@@ -14,9 +14,9 @@
         background: #0c0e14;
         color: #f1f5f9;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        overflow: hidden;
+        overflow-x: hidden;
         height: 100vh;
-        width: 100vw;
+        width: 100%;
       }
       #root {
         height: 100%;
@@ -28,6 +28,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/panel/main.tsx"></script>
+    <script type="module" src="/src/sidepanel/main.tsx"></script>
   </body>
 </html>

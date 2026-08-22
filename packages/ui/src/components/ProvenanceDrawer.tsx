@@ -92,6 +92,26 @@ export const ProvenanceDrawer: React.FC<ProvenanceDrawerProps> = ({
               <span style={{ color: colors.primaryLight, fontWeight: 600 }}>URL:</span>{' '}
               <span style={{ color: colors.text }}>{lineage.request_url}</span>
             </div>
+            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: colors.textMuted }}>Capture Method:</span>{' '}
+              <span
+                style={{
+                  fontSize: 11,
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  background: lineage.capture_mode === 'devtools' ? `${colors.accent}22` : `${colors.primary}22`,
+                  color: lineage.capture_mode === 'devtools' ? colors.accent : colors.primaryLight,
+                  fontWeight: 600,
+                }}
+              >
+                {lineage.capture_mode === 'devtools' ? 'DevTools Deep Capture' : 'Page Capture (fetch/XHR)'}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: colors.textDim, marginBottom: 8 }}>
+              {lineage.capture_mode === 'devtools'
+                ? 'Visibility: Chrome Network panel · Request headers: Redacted'
+                : 'Visibility: fetch / XMLHttpRequest JSON · Request headers: Not collected'}
+            </div>
             <div style={{ marginBottom: 8 }}>
               <span style={{ color: colors.textMuted }}>Capture ID:</span>{' '}
               <span style={{ color: colors.accent }}>{lineage.capture_id}</span>

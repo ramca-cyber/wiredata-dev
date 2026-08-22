@@ -1,14 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "Network Data Workbench",
+  "minimum_chrome_version": "142",
+  "name": "WireData - Network Data Workbench",
   "version": "0.1.0",
   "description": "Turn structured JSON network traffic into persistent, queryable, traceable local datasets.",
-  "devtools_page": "devtools.html",
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  "action": {
+    "default_title": "Open WireData Side Panel"
   },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "devtools_page": "devtools.html",
   "permissions": [
+    "activeTab",
+    "scripting",
+    "sidePanel",
     "storage",
     "unlimitedStorage"
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
 }

@@ -72,8 +72,9 @@ export class ChromeNetworkCaptureAdapter {
       const capture: CapturedRequest = {
         capture_id: captureId,
         session_id: this.sessionId,
+        capture_mode: 'devtools',
         request: {
-          url: request.url,
+          url: sanitizedUrl,
           sanitized_url: sanitizedUrl,
           route_template: normalizedRoute,
           method: request.method || 'GET',
@@ -133,8 +134,9 @@ export class ChromeNetworkCaptureAdapter {
       const capture: CapturedRequest = {
         capture_id: captureId,
         session_id: this.sessionId,
+        capture_mode: 'devtools',
         request: {
-          url: request.url,
+          url: sanitizedUrl,
           sanitized_url: sanitizedUrl,
           route_template: normalizedRoute,
           method: request.method || 'GET',

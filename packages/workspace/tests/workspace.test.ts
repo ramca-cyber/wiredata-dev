@@ -158,4 +158,51 @@ describe('Workspace Storage & Serialization', () => {
     expect(savedSnapshot?.snapshot.snapshot_id).toBe(snapshotId);
     expect(savedSnapshot?.rows).toHaveLength(1);
   });
+
+  it('openOrCreateWorkspace preserves workspace identity and metadata when reopened', async () => {
+    const initialMeta = await manager.getMetadata();
+    expect(initialMeta).not.toBeNull();
+    const originalWorkspaceId = initialMeta!.workspace_id;
+    const originalCreatedAt = initialMeta!.created_at;
+
+    // Simulate another surface (e.g. Workbench tab) opening the exact same adapter
+    const secondManager = new WorkspaceManager(adapter);
+    const secondMeta = await secondManager.openOrCreateWorkspace();
+
+    expect(secondMeta.workspace_id).toBe(originalWorkspaceId);
+    expect(secondMeta.created_at).toBe(originalCreatedAt);
+  });
+
+  it('saveCapture guarantees only sanitized URL is serialized to disk', async () => {
+    const sessionId = generateULID();
+    const captureId = generateULID();
+
+    const capture: CapturedRequest = {
+      capture_id: captureId,
+      session_id: sessionId,
+      capture_mode: 'page',
+      request: {
+        url: 'https://api.com/checkout?token=RAW_SECRET_123',
+        sanitized_url: 'https://api.com/checkout?token=[REDACTED]',
+        method: 'POST',
+        query_parameters: [{ name: 'token', value: '[REDACTED]', is_redacted: true }],
+      },
+      response: {
+        status: 200,
+        status_text: 'OK',
+        mime_type: 'application/json',
+        body_size: 20,
+        body_hash: 'h_clean',
+        body_object_ref: 'h_clean',
+      },
+      timing: { started_at: '', completed_at: '', duration_ms: 10 },
+      classification: { json_candidate: true, parse_status: 'parsed' },
+    };
+
+    await manager.saveCapture(sessionId, capture);
+    const rawFileContent = await adapter.readFile(`sessions/${sessionId}/captures/${captureId}.json`);
+    expect(rawFileContent).not.toBeNull();
+    expect(rawFileContent).not.toContain('RAW_SECRET_123');
+    expect(rawFileContent).toContain('[REDACTED]');
+  });
 });

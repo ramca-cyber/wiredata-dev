@@ -134,7 +134,21 @@ export class FSDirectoryAdapter implements IFileAdapter {
 export class WorkspaceManager implements IWorkspaceStorage {
   constructor(private adapter: IFileAdapter) {}
 
-  async initializeWorkspace(metadata?: Partial<WorkspaceMetadata>): Promise<void> {
+  /**
+   * Opens an existing workspace preserving its identity and metadata, or creates a fresh one
+   */
+  async openOrCreateWorkspace(metadata?: Partial<WorkspaceMetadata>): Promise<WorkspaceMetadata> {
+    const existing = await this.getMetadata();
+    if (existing) {
+      const updated: WorkspaceMetadata = {
+        ...existing,
+        last_opened_at: new Date().toISOString(),
+        application_version: '0.1.0',
+      };
+      await this.adapter.writeFile('workspace.json', JSON.stringify(updated, null, 2));
+      return updated;
+    }
+
     const meta: WorkspaceMetadata = {
       format_version: 1,
       workspace_id: metadata?.workspace_id || generateULID(),
@@ -148,6 +162,11 @@ export class WorkspaceManager implements IWorkspaceStorage {
     await this.adapter.createDir('datasets');
     await this.adapter.createDir('queries');
     await this.adapter.createDir('exports');
+    return meta;
+  }
+
+  async initializeWorkspace(metadata?: Partial<WorkspaceMetadata>): Promise<void> {
+    await this.openOrCreateWorkspace(metadata);
   }
 
   async getMetadata(): Promise<WorkspaceMetadata | null> {
@@ -197,7 +216,17 @@ export class WorkspaceManager implements IWorkspaceStorage {
   async saveCapture(sessionId: ULID, capture: CapturedRequest, rawBody?: unknown): Promise<void> {
     const capturesDir = `sessions/${sessionId}/captures`;
     await this.adapter.createDir(capturesDir);
-    await this.adapter.writeFile(`${capturesDir}/${capture.capture_id}.json`, JSON.stringify(capture, null, 2));
+
+    // Strict privacy guarantee: ensure only sanitized URL is serialized to disk
+    const sanitizedCapture: CapturedRequest = {
+      ...capture,
+      request: {
+        ...capture.request,
+        url: capture.request.sanitized_url || capture.request.url,
+      },
+    };
+
+    await this.adapter.writeFile(`${capturesDir}/${capture.capture_id}.json`, JSON.stringify(sanitizedCapture, null, 2));
 
     // Save content-addressed raw body object if provided
     if (rawBody !== undefined && capture.response.body_hash) {

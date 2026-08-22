@@ -31,6 +31,6 @@ export const colors = {
 };
 
 export const fonts = {
-  body: "'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  mono: "'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace",
+  body: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+  mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 };

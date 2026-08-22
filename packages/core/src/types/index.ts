@@ -42,6 +42,8 @@ export interface SanitizedHeader {
   is_redacted: boolean;
 }
 
+export type CaptureMode = 'page' | 'devtools';
+
 export interface SanitizedQueryParam {
   name: string;
   value: string;
@@ -49,13 +51,13 @@ export interface SanitizedQueryParam {
 }
 
 export interface CapturedRequestDetails {
-  url: string;
+  url: string; // strictly sanitized URL
   sanitized_url: string;
   route_template?: string;
   method: string;
   query_parameters: SanitizedQueryParam[];
-  headers: SanitizedHeader[];
-  body_sanitized?: string;
+  headers?: SanitizedHeader[]; // omitted entirely in 'page' mode
+  body_sanitized?: string; // omitted in 'page' mode
   body_hash?: string;
   graphql_operation_name?: string;
 }
@@ -64,7 +66,7 @@ export interface CapturedResponseDetails {
   status: number;
   status_text: string;
   mime_type: string;
-  headers: SanitizedHeader[];
+  headers?: SanitizedHeader[];
   body_size: number;
   body_hash: string;
   body_object_ref: string; // SHA-256 of canonical body
@@ -79,6 +81,7 @@ export interface CapturedTiming {
 export interface CapturedRequest {
   capture_id: ULID;
   session_id: ULID;
+  capture_mode: CaptureMode;
   page_context_id?: ULID;
   request: CapturedRequestDetails;
   response: CapturedResponseDetails;
@@ -109,9 +112,10 @@ export interface DatasetCandidate {
 
 export interface ColumnDefinition {
   name: string;
-  original_name: string;
-  source_pointer_template: string; // e.g. "/customer/address/city"
+  original_name?: string;
+  source_pointer_template?: string; // e.g. "/customer/address/city"
   logical_type: LogicalType;
+  json_pointer?: JSONPointer;
   inferred_type: LogicalType;
   type_override?: LogicalType;
   is_visible: boolean;
@@ -163,10 +167,11 @@ export interface RowLineage {
   row_id: ULID;
   session_id: ULID;
   capture_id: ULID;
+  capture_mode: CaptureMode;
   response_hash: string;
   record_pointer: JSONPointer;
   page_context_id?: ULID;
-  request_url: string;
+  request_url: string; // strictly sanitized URL
   captured_at: string;
   suppressed_source_rows?: RowLineage[];
 }
