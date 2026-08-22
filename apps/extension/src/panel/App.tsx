@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   buildDatasetSnapshot,
   CandidateCollection,
@@ -12,6 +12,8 @@ import {
   generateJsonSchema,
   generateTypeScriptInterface,
   generateULID,
+  groupCandidatesByRoute,
+  GroupedRouteCandidate,
   serializeToCsv,
   serializeToJsonl,
   ULID,
@@ -495,6 +497,10 @@ export default function App() {
 
   const totalBodyBytes = captures.reduce((acc, c) => acc + (c.response.body_size || 0), 0);
 
+  const groupedRouteCandidates = useMemo(() => {
+    return groupCandidatesByRoute(captures, responseBodiesRef.current);
+  }, [captures]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: colors.bg }}>
       {/* Top Navbar */}
@@ -669,7 +675,7 @@ export default function App() {
           >
             <span>✨ Candidates</span>
             <span style={{ fontSize: 11, background: `${colors.accent}33`, color: colors.accent, padding: '1px 6px', borderRadius: 10 }}>
-              {candidatesList.reduce((acc, c) => acc + c.candidates.length, 0)}
+              {groupedRouteCandidates.reduce((acc, r) => acc + r.collections.length, 0)}
             </span>
           </button>
 
@@ -891,86 +897,220 @@ export default function App() {
 
           {/* Candidates View */}
           {activeView === 'candidates' && (
-            <div style={{ flex: 1, padding: 20, overflowY: 'auto' }}>
-              <h2 style={{ margin: '0 0 16px 0', fontSize: 18, color: colors.text }}>Discovered Candidate Collections</h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 16 }}>
-                {candidatesList.length === 0 ? (
-                  <div style={{ color: colors.textDim, padding: 20 }}>No dataset candidates detected yet.</div>
-                ) : (
-                  candidatesList.map(({ capture, candidates }, i) =>
-                    candidates.map((cand, j) => (
+            <div style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
+              <div style={{ marginBottom: 20 }}>
+                <h2 style={{ margin: '0 0 6px 0', fontSize: 18, color: colors.text }}>
+                  Discovered Data Collections
+                </h2>
+                <p style={{ margin: 0, color: colors.textMuted, fontSize: 13 }}>
+                  Automatically grouped by logical API route. You can extract combined datasets across all paginated captures or extract individual requests and nested sub-collections.
+                </p>
+              </div>
+
+              {groupedRouteCandidates.length === 0 ? (
+                <div style={{ color: colors.textDim, padding: 40, textAlign: 'center', background: colors.cardBg, borderRadius: 8, border: `1px solid ${colors.border}` }}>
+                  No dataset candidates detected in captured traffic yet.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  {groupedRouteCandidates.map((routeGroup) => (
+                    <div
+                      key={routeGroup.route_id}
+                      style={{
+                        background: colors.cardBg,
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: 10,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {/* Route Header Banner */}
                       <div
-                        key={`${i}-${j}`}
                         style={{
-                          background: colors.cardBg,
-                          border: `1px solid ${colors.border}`,
-                          borderRadius: 8,
-                          padding: 16,
+                          padding: '12px 18px',
+                          background: colors.hoverBg,
+                          borderBottom: `1px solid ${colors.border}`,
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: 12,
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          flexWrap: 'wrap',
+                          gap: 10,
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 16, fontWeight: 700, color: colors.primaryLight }}>
-                            {cand.suggested_name}
-                          </span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span
-                              style={{
-                                fontSize: 10,
-                                fontWeight: 700,
-                                padding: '2px 6px',
-                                borderRadius: 4,
-                                background: cand.confidence === 'high' ? `${colors.success}22` : `${colors.warning}22`,
-                                color: cand.confidence === 'high' ? colors.success : colors.warning,
-                              }}
-                            >
-                              {cand.confidence.toUpperCase()} CONFIDENCE
-                            </span>
-                            <button
-                              onClick={() => handleDismissCandidate(capture.capture_id, cand.pointer)}
-                              title="Dismiss candidate"
-                              style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: colors.textDim,
-                                fontSize: 12,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, fontFamily: fonts.mono, color: colors.textMuted }}>
-                          <div>Pointer: {cand.pointer}</div>
-                          <div>Endpoint: {capture.request.route_template || capture.request.sanitized_url}</div>
-                          <div>Rows: {cand.row_count} | Fields: {cand.field_count}</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <button
-                            onClick={() => handleCreateDataset(cand, capture)}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span
                             style={{
-                              flex: 1,
-                              background: colors.primary,
-                              color: '#ffffff',
-                              border: 'none',
-                              borderRadius: 6,
-                              padding: '8px 12px',
+                              background: routeGroup.method === 'GET' ? `${colors.primary}22` : `${colors.accent}22`,
+                              color: routeGroup.method === 'GET' ? colors.primaryLight : colors.accent,
+                              fontWeight: 700,
                               fontSize: 12,
-                              fontWeight: 600,
-                              cursor: 'pointer',
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              fontFamily: fonts.mono,
                             }}
                           >
-                            + Create Dataset Table
-                          </button>
+                            {routeGroup.method}
+                          </span>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: colors.text, fontFamily: fonts.mono }}>
+                            {routeGroup.route_template}
+                          </span>
+                          {routeGroup.graphql_operation && (
+                            <span style={{ fontSize: 12, color: colors.accent, background: `${colors.accent}22`, padding: '2px 6px', borderRadius: 4 }}>
+                              GraphQL: {routeGroup.graphql_operation}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: colors.textMuted }}>
+                          <span>
+                            <strong style={{ color: colors.text }}>{routeGroup.total_captures}</strong> {routeGroup.total_captures === 1 ? 'capture' : 'captures (paginated/repeated)'}
+                          </span>
                         </div>
                       </div>
-                    ))
-                  )
-                )}
-              </div>
+
+                      {/* Collections within this Route */}
+                      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                        {routeGroup.collections.map((col) => {
+                          const isSubCollection = col.is_sub_collection || col.pointer.includes('items') || col.pointer.includes('children');
+                          return (
+                            <div
+                              key={col.pointer}
+                              style={{
+                                background: colors.panelBg,
+                                border: `1px solid ${colors.borderLight}`,
+                                borderRadius: 8,
+                                padding: 16,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 10,
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <span style={{ fontSize: 16, fontWeight: 700, color: colors.primaryLight }}>
+                                    {col.suggested_name}
+                                  </span>
+                                  {isSubCollection && (
+                                    <span style={{ fontSize: 11, color: colors.accent, background: `${colors.accent}22`, padding: '2px 6px', borderRadius: 4 }}>
+                                      ⑂ Sub-Collection
+                                    </span>
+                                  )}
+                                  <span
+                                    style={{
+                                      fontSize: 10,
+                                      fontWeight: 700,
+                                      padding: '2px 6px',
+                                      borderRadius: 4,
+                                      background: col.confidence === 'high' ? `${colors.success}22` : `${colors.warning}22`,
+                                      color: col.confidence === 'high' ? colors.success : colors.warning,
+                                    }}
+                                  >
+                                    {col.confidence.toUpperCase()} CONFIDENCE
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: fonts.mono }}>
+                                  Pointer: {col.pointer}
+                                </span>
+                              </div>
+
+                              <div style={{ fontSize: 12, color: colors.textMuted, display: 'flex', gap: 16 }}>
+                                <span>
+                                  Total records: <strong style={{ color: colors.text }}>{col.total_rows.toLocaleString()}</strong> ({col.sample_rows_per_capture} per capture)
+                                </span>
+                                <span>
+                                  Fields: <strong style={{ color: colors.text }}>{col.field_count}</strong> ({col.sample_keys.slice(0, 5).join(', ')}...)
+                                </span>
+                              </div>
+
+                              <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
+                                <button
+                                  onClick={() => {
+                                    const firstCapture = routeGroup.captures[0];
+                                    const cand: CandidateCollection = {
+                                      pointer: col.pointer,
+                                      display_path: col.pointer,
+                                      suggested_name: col.suggested_name,
+                                      confidence: col.confidence,
+                                      confidence_score: 0.9,
+                                      row_count: col.total_rows,
+                                      field_count: col.field_count,
+                                      sample_keys: col.sample_keys,
+                                    };
+                                    handleCreateDataset(cand, firstCapture);
+                                  }}
+                                  style={{
+                                    background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+                                    color: '#ffffff',
+                                    border: 'none',
+                                    borderRadius: 6,
+                                    padding: '8px 16px',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  ⚡ Extract Combined Dataset ({col.total_rows} rows from {routeGroup.total_captures} {routeGroup.total_captures === 1 ? 'capture' : 'pages'})
+                                </button>
+
+                                {routeGroup.total_captures > 1 && (
+                                  <button
+                                    onClick={() => {
+                                      const latest = routeGroup.captures[routeGroup.captures.length - 1];
+                                      const cand: CandidateCollection = {
+                                        pointer: col.pointer,
+                                        display_path: col.pointer,
+                                        suggested_name: `${col.suggested_name}_single_page`,
+                                        confidence: col.confidence,
+                                        confidence_score: 0.9,
+                                        row_count: col.sample_rows_per_capture,
+                                        field_count: col.field_count,
+                                        sample_keys: col.sample_keys,
+                                      };
+                                      // Single capture target
+                                      const dsId = `ds_${cand.suggested_name}_${latest.capture_id.slice(-4)}`;
+                                      const def: DatasetDefinition = {
+                                        id: dsId,
+                                        name: cand.suggested_name,
+                                        version: 1,
+                                        created_at: new Date().toISOString(),
+                                        updated_at: new Date().toISOString(),
+                                        sources: [{ method: latest.request.method, route_pattern: latest.request.url }],
+                                        extraction: {
+                                          record_pointer: cand.pointer,
+                                          nested_object_policy: 'flatten',
+                                          nested_array_policy: 'json',
+                                          flatten_delimiter: '__',
+                                        },
+                                        identity_columns: cand.sample_keys.includes('id') ? ['id'] : [],
+                                        deduplication: 'keep_latest',
+                                        columns: {},
+                                      };
+                                      setDefinitions(prev => [...prev.filter(d => d.id !== dsId), def]);
+                                      setActiveDatasetId(dsId);
+                                      rebuildDataset(def);
+                                      setActiveView('datasets');
+                                    }}
+                                    style={{
+                                      background: colors.cardBg,
+                                      color: colors.text,
+                                      border: `1px solid ${colors.borderLight}`,
+                                      borderRadius: 6,
+                                      padding: '8px 14px',
+                                      fontSize: 12,
+                                      fontWeight: 500,
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    Extract Single Capture Only ({col.sample_rows_per_capture} rows)
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

@@ -9,6 +9,7 @@ export * from './json/pointer.js';
 export * from './capture/redact.js';
 export * from './inference/route.js';
 export * from './inference/candidate.js';
+export * from './inference/grouping.js';
 export * from './inference/typing.js';
 export * from './datasets/flatten.js';
 export * from './datasets/dedup.js';
