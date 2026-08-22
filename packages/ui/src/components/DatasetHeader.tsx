@@ -6,12 +6,14 @@ export interface DatasetHeaderProps {
   snapshot: DatasetSnapshot;
   onExport?: (format: 'csv' | 'parquet' | 'jsonl') => void;
   onGenerateCode?: (type: 'ts' | 'jsonschema') => void;
+  onDeleteDataset?: () => void;
 }
 
 export const DatasetHeader: React.FC<DatasetHeaderProps> = ({
   snapshot,
   onExport,
   onGenerateCode,
+  onDeleteDataset,
 }) => {
   const { coverage, row_count, column_count, duplicate_count } = snapshot;
 
@@ -76,7 +78,7 @@ export const DatasetHeader: React.FC<DatasetHeaderProps> = ({
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button
           onClick={() => onGenerateCode?.('ts')}
           style={{
@@ -137,6 +139,24 @@ export const DatasetHeader: React.FC<DatasetHeaderProps> = ({
         >
           CSV
         </button>
+        {onDeleteDataset && (
+          <button
+            onClick={onDeleteDataset}
+            title="Delete this dataset"
+            style={{
+              background: 'transparent',
+              color: colors.error,
+              border: `1px solid ${colors.error}44`,
+              borderRadius: 6,
+              padding: '6px 10px',
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            🗑 Delete
+          </button>
+        )}
       </div>
     </div>
   );

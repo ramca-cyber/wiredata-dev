@@ -401,6 +401,76 @@ export default function App() {
     duckdbClient.registerDataset(def.name, snapshot.schema, rows).catch(console.error);
   };
 
+  // Clear All Data (Reset Workbench)
+  const handleClearAllData = async () => {
+    if (typeof window !== 'undefined' && !window.confirm('Are you sure you want to clear all captures, datasets, and working data?')) return;
+    setCaptures([]);
+    setDefinitions([]);
+    setSnapshots(new Map());
+    setCandidatesList([]);
+    setActiveDatasetId(null);
+    setSelectedRow(null);
+    setSqlResult(null);
+    responseBodiesRef.current.clear();
+    const newSessionId = generateULID();
+    const newSession: CaptureSession = {
+      session_id: newSessionId,
+      name: 'Active Capture Session',
+      started_at: new Date().toISOString(),
+      initial_page_url: typeof window !== 'undefined' ? window.location.href : '',
+      navigation_history: [],
+      capture_count: 0,
+      body_bytes: 0,
+      application_version: '0.1.0',
+      status: 'capturing',
+    };
+    setActiveSession(newSession);
+    await workspaceManager.saveSession(newSession);
+  };
+
+  // Delete Individual Dataset
+  const handleDeleteDataset = (datasetId: string) => {
+    setDefinitions(prev => prev.filter(d => d.id !== datasetId));
+    setSnapshots(prev => {
+      const next = new Map(prev);
+      next.delete(datasetId);
+      return next;
+    });
+    if (activeDatasetId === datasetId) {
+      const remaining = definitions.filter(d => d.id !== datasetId);
+      setActiveDatasetId(remaining[0]?.id || null);
+    }
+  };
+
+  // Delete Individual Capture
+  const handleDeleteCapture = (captureId: ULID) => {
+    setCaptures(prev => prev.filter(c => c.capture_id !== captureId));
+    setCandidatesList(prev => prev.filter(item => item.capture.capture_id !== captureId));
+  };
+
+  // Clear All Captures Only
+  const handleClearCaptures = () => {
+    setCaptures([]);
+    setCandidatesList([]);
+  };
+
+  // Dismiss Candidate
+  const handleDismissCandidate = (captureId: ULID, pointer: string) => {
+    setCandidatesList(prev =>
+      prev
+        .map(item => {
+          if (item.capture.capture_id === captureId) {
+            return {
+              ...item,
+              candidates: item.candidates.filter(c => c.pointer !== pointer),
+            };
+          }
+          return item;
+        })
+        .filter(item => item.candidates.length > 0)
+    );
+  };
+
   // Run SQL Query
   const handleRunQuery = async () => {
     setSqlError(null);
@@ -482,6 +552,22 @@ export default function App() {
             ⚡ Ingest Fixture Data
           </button>
           <button
+            onClick={handleClearAllData}
+            title="Reset workbench and clear all data"
+            style={{
+              background: colors.cardBg,
+              color: colors.error,
+              border: `1px solid ${colors.error}44`,
+              borderRadius: 6,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            🗑 Clear All
+          </button>
+          <button
             onClick={handleSelectWorkspace}
             style={{
               background: colors.cardBg,
@@ -531,7 +617,7 @@ export default function App() {
         {/* Sidebar */}
         <aside
           style={{
-            width: 220,
+            width: 230,
             background: colors.panelBg,
             borderRight: `1px solid ${colors.border}`,
             display: 'flex',
@@ -611,31 +697,62 @@ export default function App() {
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
             {definitions.map(def => {
               const snap = snapshots.get(def.id)?.snapshot;
+              const isSelected = activeDatasetId === def.id && activeView === 'datasets';
               return (
-                <button
+                <div
                   key={def.id}
-                  onClick={() => {
-                    setActiveDatasetId(def.id);
-                    setActiveView('datasets');
-                  }}
                   style={{
-                    background: activeDatasetId === def.id && activeView === 'datasets' ? colors.hoverBg : 'transparent',
-                    color: activeDatasetId === def.id && activeView === 'datasets' ? colors.primaryLight : colors.text,
-                    border: 'none',
-                    borderRadius: 6,
-                    padding: '8px 12px',
-                    textAlign: 'left',
-                    fontSize: 13,
-                    fontWeight: 500,
-                    cursor: 'pointer',
                     display: 'flex',
-                    justifyContent: 'space-between',
                     alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: isSelected ? colors.hoverBg : 'transparent',
+                    borderRadius: 6,
+                    paddingRight: 6,
                   }}
                 >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{def.name}</span>
-                  <span style={{ fontSize: 11, color: colors.textDim }}>{snap?.row_count ?? 0}</span>
-                </button>
+                  <button
+                    onClick={() => {
+                      setActiveDatasetId(def.id);
+                      setActiveView('datasets');
+                    }}
+                    style={{
+                      flex: 1,
+                      background: 'transparent',
+                      color: isSelected ? colors.primaryLight : colors.text,
+                      border: 'none',
+                      padding: '8px 10px',
+                      textAlign: 'left',
+                      fontSize: 13,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {def.name}
+                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: colors.textDim }}>{snap?.row_count ?? 0}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteDataset(def.id);
+                      }}
+                      title="Delete dataset"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: colors.textDim,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        padding: '2px 4px',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -646,7 +763,26 @@ export default function App() {
           {/* Captures Log View */}
           {activeView === 'captures' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, overflow: 'hidden' }}>
-              <h2 style={{ margin: '0 0 16px 0', fontSize: 18, color: colors.text }}>Captured Traffic Log</h2>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <h2 style={{ margin: 0, fontSize: 18, color: colors.text }}>Captured Traffic Log ({captures.length})</h2>
+                {captures.length > 0 && (
+                  <button
+                    onClick={handleClearCaptures}
+                    style={{
+                      background: 'transparent',
+                      color: colors.error,
+                      border: `1px solid ${colors.error}44`,
+                      borderRadius: 6,
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Clear Captures
+                  </button>
+                )}
+              </div>
               <div
                 style={{
                   flex: 1,
@@ -710,7 +846,7 @@ export default function App() {
                           {c.request.sanitized_url}
                         </span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <span style={{ color: c.response.status === 200 ? colors.success : colors.error, fontWeight: 600 }}>
                           {c.response.status}
                         </span>
@@ -731,6 +867,20 @@ export default function App() {
                             Inspect Body
                           </button>
                         )}
+                        <button
+                          onClick={() => handleDeleteCapture(c.capture_id)}
+                          title="Exclude this capture"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: colors.textDim,
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            padding: '2px 4px',
+                          }}
+                        >
+                          ✕
+                        </button>
                       </div>
                     </div>
                   ))
@@ -765,39 +915,57 @@ export default function App() {
                           <span style={{ fontSize: 16, fontWeight: 700, color: colors.primaryLight }}>
                             {cand.suggested_name}
                           </span>
-                          <span
-                            style={{
-                              fontSize: 10,
-                              fontWeight: 700,
-                              padding: '2px 6px',
-                              borderRadius: 4,
-                              background: cand.confidence === 'high' ? `${colors.success}22` : `${colors.warning}22`,
-                              color: cand.confidence === 'high' ? colors.success : colors.warning,
-                            }}
-                          >
-                            {cand.confidence.toUpperCase()} CONFIDENCE
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                background: cand.confidence === 'high' ? `${colors.success}22` : `${colors.warning}22`,
+                                color: cand.confidence === 'high' ? colors.success : colors.warning,
+                              }}
+                            >
+                              {cand.confidence.toUpperCase()} CONFIDENCE
+                            </span>
+                            <button
+                              onClick={() => handleDismissCandidate(capture.capture_id, cand.pointer)}
+                              title="Dismiss candidate"
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: colors.textDim,
+                                fontSize: 12,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
                         </div>
                         <div style={{ fontSize: 12, fontFamily: fonts.mono, color: colors.textMuted }}>
                           <div>Pointer: {cand.pointer}</div>
                           <div>Endpoint: {capture.request.route_template || capture.request.sanitized_url}</div>
                           <div>Rows: {cand.row_count} | Fields: {cand.field_count}</div>
                         </div>
-                        <button
-                          onClick={() => handleCreateDataset(cand, capture)}
-                          style={{
-                            background: colors.primary,
-                            color: '#ffffff',
-                            border: 'none',
-                            borderRadius: 6,
-                            padding: '8px 12px',
-                            fontSize: 12,
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          + Create Dataset Table
-                        </button>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            onClick={() => handleCreateDataset(cand, capture)}
+                            style={{
+                              flex: 1,
+                              background: colors.primary,
+                              color: '#ffffff',
+                              border: 'none',
+                              borderRadius: 6,
+                              padding: '8px 12px',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            + Create Dataset Table
+                          </button>
+                        </div>
                       </div>
                     ))
                   )
@@ -811,6 +979,7 @@ export default function App() {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <DatasetHeader
                 snapshot={activeSnapshotData.snapshot}
+                onDeleteDataset={() => handleDeleteDataset(activeDataset.id)}
                 onExport={format => {
                   if (format === 'csv') {
                     const csv = serializeToCsv(activeSnapshotData.rows, activeSnapshotData.snapshot.schema, true);
