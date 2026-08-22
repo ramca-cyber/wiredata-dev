@@ -194,11 +194,51 @@ export default function App() {
 
         const candidates = detectCandidateCollections(rawJson);
         ingestCapturedData(capture, rawJson, candidates);
+
+        // Auto-create orders dataset if found
+        if (item.url.includes('/api/orders?page=1') && candidates.length > 0) {
+          const cand = candidates.find(c => c.pointer === '/data/orders') || candidates[0];
+          const dsId = `ds_${cand.suggested_name}`;
+          const def: DatasetDefinition = {
+            id: dsId,
+            name: cand.suggested_name,
+            version: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            sources: [
+              {
+                method: 'GET',
+                route_pattern: '/api/orders',
+              },
+            ],
+            extraction: {
+              record_pointer: cand.pointer,
+              nested_object_policy: 'flatten',
+              nested_array_policy: 'json',
+              flatten_delimiter: '__',
+            },
+            identity_columns: ['id'],
+            deduplication: 'keep_latest',
+            columns: {},
+          };
+          setDefinitions(prev => (prev.some(d => d.id === dsId) ? prev : [...prev, def]));
+          setActiveDatasetId(dsId);
+        }
       } catch (err: any) {
         console.warn('Simulation fetch error:', err);
       }
     }
   };
+
+  // Auto-ingest when running standalone in browser outside Chrome DevTools
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.devtools || !chrome.devtools.network) {
+      const timer = setTimeout(() => {
+        handleSimulateFixtureTraffic();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [activeSession]);
 
   // Toggle Capture
   const toggleCapture = () => {
@@ -259,6 +299,21 @@ export default function App() {
     rebuildDataset(def);
     setActiveView('datasets');
   };
+
+  // Automatically rebuild dataset snapshots whenever definitions or captures change
+  useEffect(() => {
+    if (definitions.length > 0 && captures.length > 0) {
+      for (const def of definitions) {
+        const { snapshot, rows } = buildDatasetSnapshot({
+          definition: def,
+          captures,
+          responseBodies: responseBodiesRef.current,
+        });
+        setSnapshots(prev => new Map(prev).set(def.id, { snapshot, rows }));
+        duckdbClient.registerDataset(def.name, snapshot.schema, rows).catch(console.error);
+      }
+    }
+  }, [definitions, captures]);
 
   // Rebuild Dataset Snapshot
   const rebuildDataset = (def: DatasetDefinition) => {
@@ -534,8 +589,30 @@ export default function App() {
                 }}
               >
                 {captures.length === 0 ? (
-                  <div style={{ padding: 40, textAlign: 'center', color: colors.textDim }}>
-                    No network captures yet. Click "Start Capture" and browse the application.
+                  <div style={{ padding: '60px 24px', textAlign: 'center', maxWidth: 540, margin: '0 auto' }}>
+                    <div style={{ fontSize: 36, marginBottom: 12 }}>📡</div>
+                    <h3 style={{ fontSize: 18, fontWeight: 700, color: colors.text, margin: '0 0 8px 0' }}>
+                      Ready to Capture Application Data
+                    </h3>
+                    <p style={{ color: colors.textMuted, fontSize: 13, margin: '0 0 20px 0', lineHeight: 1.6, fontFamily: fonts.body }}>
+                      In DevTools mode, JSON responses are captured automatically while you use the application. In this browser preview, click below to ingest sample traffic and explore tables, lineage, and SQL.
+                    </p>
+                    <button
+                      onClick={handleSimulateFixtureTraffic}
+                      style={{
+                        background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 6,
+                        padding: '10px 20px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(2, 132, 199, 0.3)',
+                      }}
+                    >
+                      ⚡ Ingest Sample Fixture Data
+                    </button>
                   </div>
                 ) : (
                   captures.map(c => (
