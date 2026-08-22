@@ -1,0 +1,26 @@
+{
+  "name": "wiredata-dev",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Network Data Workbench - Turn structured JSON application traffic into queryable, traceable local datasets",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace=apps/extension run dev",
+    "fixture": "npm --workspace=apps/fixture-app run dev",
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --project=integration",
+    "typecheck": "tsc -b",
+    "lint": "eslint . --ext .ts,.tsx",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

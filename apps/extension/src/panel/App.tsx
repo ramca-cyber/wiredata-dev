@@ -1,0 +1,798 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  buildDatasetSnapshot,
+  CandidateCollection,
+  CapturedRequest,
+  CaptureSession,
+  DatasetDefinition,
+  DatasetSnapshot,
+  detectCandidateCollections,
+  ExtractedRow,
+  generateFixtureJson,
+  generateJsonSchema,
+  generateTypeScriptInterface,
+  generateULID,
+  serializeToCsv,
+  serializeToJsonl,
+  ULID,
+} from '@wiredata/core';
+import {
+  DirectoryHandleManager,
+  FSDirectoryAdapter,
+  InMemoryFileAdapter,
+  WorkspaceManager,
+} from '@wiredata/workspace';
+import { DuckDBClient } from '@wiredata/duckdb';
+import {
+  colors,
+  DatasetHeader,
+  fonts,
+  JsonTreeViewer,
+  ProvenanceDrawer,
+  StatusBar,
+  VirtualizedTable,
+} from '@wiredata/ui';
+import { ChromeNetworkCaptureAdapter } from '../adapters/network';
+
+type ActiveView = 'captures' | 'datasets' | 'candidates' | 'sql' | 'workspace';
+
+export default function App() {
+  const [activeView, setActiveView] = useState<ActiveView>('captures');
+  const [isCapturing, setIsCapturing] = useState<boolean>(false);
+  const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
+
+  // Storage and Manager
+  const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
+    () => new WorkspaceManager(new InMemoryFileAdapter())
+  );
+  const [workspaceName, setWorkspaceName] = useState<string>('In-Memory Working Session');
+  const [duckdbClient] = useState<DuckDBClient>(() => new DuckDBClient());
+
+  // In-flight captured data
+  const [captures, setCaptures] = useState<CapturedRequest[]>([]);
+  const responseBodiesRef = useRef<Map<string, unknown>>(new Map());
+  const [candidatesList, setCandidatesList] = useState<
+    Array<{ capture: CapturedRequest; candidates: CandidateCollection[] }>
+  >([]);
+
+  // Datasets
+  const [definitions, setDefinitions] = useState<DatasetDefinition[]>([]);
+  const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<Map<string, { snapshot: DatasetSnapshot; rows: ExtractedRow[] }>>(
+    new Map()
+  );
+
+  // Selected provenance & modals
+  const [selectedRow, setSelectedRow] = useState<ExtractedRow | null>(null);
+  const [rawViewerData, setRawViewerData] = useState<{ body: unknown; pointer: string } | null>(null);
+  const [exportModalContent, setExportModalContent] = useState<{ title: string; text: string } | null>(null);
+
+  // SQL Runner state
+  const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM orders LIMIT 20;');
+  const [sqlResult, setSqlResult] = useState<{ columns: string[]; rows: any[]; durationMs: number } | null>(null);
+  const [sqlError, setSqlError] = useState<string | null>(null);
+
+  // Adapter ref
+  const adapterRef = useRef<ChromeNetworkCaptureAdapter | null>(null);
+
+  // Initialize workspace & session
+  useEffect(() => {
+    const initSession = async () => {
+      const sessionId = generateULID();
+      const session: CaptureSession = {
+        session_id: sessionId,
+        name: 'Active Capture Session',
+        started_at: new Date().toISOString(),
+        initial_page_url: typeof window !== 'undefined' ? window.location.href : '',
+        navigation_history: [],
+        capture_count: 0,
+        body_bytes: 0,
+        application_version: '0.1.0',
+        status: 'capturing',
+      };
+      setActiveSession(session);
+      await workspaceManager.initializeWorkspace();
+      await workspaceManager.saveSession(session);
+      await duckdbClient.init();
+    };
+
+    initSession();
+  }, []);
+
+  // Handle Directory Picker selection
+  const handleSelectWorkspace = async () => {
+    try {
+      const handle = await DirectoryHandleManager.pickDirectory();
+      const fsAdapter = new FSDirectoryAdapter(handle);
+      const wm = new WorkspaceManager(fsAdapter);
+      await wm.initializeWorkspace();
+      setWorkspaceManager(wm);
+      setWorkspaceName((handle as any).name || 'Selected Folder');
+    } catch (err: any) {
+      console.warn('Workspace selection cancelled or not supported:', err.message);
+    }
+  };
+
+  // Toggle Capture
+  const toggleCapture = () => {
+    if (isCapturing) {
+      // Stop
+      adapterRef.current?.stop();
+      setIsCapturing(false);
+      if (activeSession) {
+        workspaceManager.saveSession({ ...activeSession, status: 'complete', ended_at: new Date().toISOString() });
+      }
+    } else {
+      // Start
+      if (!activeSession) return;
+      const adapter = new ChromeNetworkCaptureAdapter(
+        activeSession.session_id,
+        (capture, rawBody, candidates) => {
+          setCaptures(prev => [capture, ...prev]);
+          if (rawBody !== undefined && capture.response.body_hash) {
+            responseBodiesRef.current.set(capture.response.body_hash, rawBody);
+            workspaceManager.saveCapture(activeSession.session_id, capture, rawBody);
+          }
+
+          if (candidates && candidates.length > 0) {
+            setCandidatesList(prev => [{ capture, candidates }, ...prev]);
+          }
+        }
+      );
+      adapter.start();
+      adapterRef.current = adapter;
+      setIsCapturing(true);
+    }
+  };
+
+  // Create Dataset from candidate
+  const handleCreateDataset = (candidate: CandidateCollection, capture: CapturedRequest) => {
+    const dsId = `ds_${candidate.suggested_name}`;
+    const def: DatasetDefinition = {
+      id: dsId,
+      name: candidate.suggested_name,
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      sources: [
+        {
+          method: capture.request.method,
+          route_pattern: capture.request.route_template || capture.request.sanitized_url,
+          graphql_operation: capture.request.graphql_operation_name,
+        },
+      ],
+      extraction: {
+        record_pointer: candidate.pointer,
+        nested_object_policy: 'flatten',
+        nested_array_policy: 'json',
+        flatten_delimiter: '__',
+      },
+      identity_columns: candidate.sample_keys.includes('id') ? ['id'] : [],
+      deduplication: 'keep_latest',
+      columns: {},
+    };
+
+    const newDefs = [...definitions.filter(d => d.id !== dsId), def];
+    setDefinitions(newDefs);
+    setActiveDatasetId(dsId);
+
+    // Build snapshot
+    rebuildDataset(def);
+    setActiveView('datasets');
+  };
+
+  // Rebuild Dataset Snapshot
+  const rebuildDataset = (def: DatasetDefinition) => {
+    const { snapshot, rows } = buildDatasetSnapshot({
+      definition: def,
+      captures,
+      responseBodies: responseBodiesRef.current,
+    });
+
+    setSnapshots(prev => new Map(prev).set(def.id, { snapshot, rows }));
+    workspaceManager.saveDatasetDefinition(def);
+    workspaceManager.saveDatasetSnapshot(snapshot, rows);
+
+    // Register in DuckDB
+    duckdbClient.registerDataset(def.name, snapshot.schema, rows).catch(console.error);
+  };
+
+  // Run SQL Query
+  const handleRunQuery = async () => {
+    setSqlError(null);
+    try {
+      const res = await duckdbClient.query(sqlQuery);
+      setSqlResult(res);
+    } catch (err: any) {
+      setSqlError(err.message);
+    }
+  };
+
+  // Show Raw Response
+  const handleShowRaw = (responseHash: string, pointer: string) => {
+    const body = responseBodiesRef.current.get(responseHash);
+    if (body) {
+      setRawViewerData({ body, pointer });
+    }
+  };
+
+  const activeDataset = definitions.find(d => d.id === activeDatasetId);
+  const activeSnapshotData = activeDatasetId ? snapshots.get(activeDatasetId) : undefined;
+
+  const totalBodyBytes = captures.reduce((acc, c) => acc + (c.response.body_size || 0), 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: colors.bg }}>
+      {/* Top Navbar */}
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 20px',
+          background: colors.panelBg,
+          borderBottom: `1px solid ${colors.border}`,
+          userSelect: 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              background: 'linear-gradient(135deg, #0284c7, #8b5cf6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 800,
+              fontSize: 13,
+              color: '#ffffff',
+            }}
+          >
+            W
+          </div>
+          <span style={{ fontWeight: 700, fontSize: 15, color: colors.text, letterSpacing: '-0.02em' }}>
+            Network Data Workbench
+          </span>
+          <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>v0.1.0</span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            onClick={handleSelectWorkspace}
+            style={{
+              background: colors.cardBg,
+              color: colors.text,
+              border: `1px solid ${colors.borderLight}`,
+              borderRadius: 6,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            📁 {workspaceName}
+          </button>
+          <button
+            onClick={toggleCapture}
+            style={{
+              background: isCapturing ? colors.error : colors.primary,
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '6px 16px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              boxShadow: isCapturing ? `0 0 12px ${colors.error}66` : 'none',
+            }}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: '#ffffff',
+              }}
+            />
+            {isCapturing ? 'Stop Capture' : 'Start Capture'}
+          </button>
+        </div>
+      </header>
+
+      {/* Main Body */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Sidebar */}
+        <aside
+          style={{
+            width: 220,
+            background: colors.panelBg,
+            borderRight: `1px solid ${colors.border}`,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '16px 8px',
+            gap: 4,
+            userSelect: 'none',
+          }}
+        >
+          <button
+            onClick={() => setActiveView('captures')}
+            style={{
+              background: activeView === 'captures' ? colors.hoverBg : 'transparent',
+              color: activeView === 'captures' ? colors.primaryLight : colors.textMuted,
+              border: 'none',
+              borderRadius: 6,
+              padding: '8px 12px',
+              textAlign: 'left',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span>📡 Captures</span>
+            <span style={{ fontSize: 11, background: `${colors.borderLight}`, padding: '1px 6px', borderRadius: 10 }}>
+              {captures.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveView('candidates')}
+            style={{
+              background: activeView === 'candidates' ? colors.hoverBg : 'transparent',
+              color: activeView === 'candidates' ? colors.accent : colors.textMuted,
+              border: 'none',
+              borderRadius: 6,
+              padding: '8px 12px',
+              textAlign: 'left',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span>✨ Candidates</span>
+            <span style={{ fontSize: 11, background: `${colors.accent}33`, color: colors.accent, padding: '1px 6px', borderRadius: 10 }}>
+              {candidatesList.reduce((acc, c) => acc + c.candidates.length, 0)}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveView('sql')}
+            style={{
+              background: activeView === 'sql' ? colors.hoverBg : 'transparent',
+              color: activeView === 'sql' ? colors.primaryLight : colors.textMuted,
+              border: 'none',
+              borderRadius: 6,
+              padding: '8px 12px',
+              textAlign: 'left',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            ⚡ SQL Workspace
+          </button>
+
+          <div style={{ margin: '16px 8px 8px 8px', fontSize: 11, fontWeight: 700, color: colors.textDim, textTransform: 'uppercase' }}>
+            Datasets ({definitions.length})
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {definitions.map(def => {
+              const snap = snapshots.get(def.id)?.snapshot;
+              return (
+                <button
+                  key={def.id}
+                  onClick={() => {
+                    setActiveDatasetId(def.id);
+                    setActiveView('datasets');
+                  }}
+                  style={{
+                    background: activeDatasetId === def.id && activeView === 'datasets' ? colors.hoverBg : 'transparent',
+                    color: activeDatasetId === def.id && activeView === 'datasets' ? colors.primaryLight : colors.text,
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '8px 12px',
+                    textAlign: 'left',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{def.name}</span>
+                  <span style={{ fontSize: 11, color: colors.textDim }}>{snap?.row_count ?? 0}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* View Content */}
+        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Captures Log View */}
+          {activeView === 'captures' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, overflow: 'hidden' }}>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: 18, color: colors.text }}>Captured Traffic Log</h2>
+              <div
+                style={{
+                  flex: 1,
+                  background: colors.cardBg,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 8,
+                  overflowY: 'auto',
+                  fontFamily: fonts.mono,
+                  fontSize: 12,
+                }}
+              >
+                {captures.length === 0 ? (
+                  <div style={{ padding: 40, textAlign: 'center', color: colors.textDim }}>
+                    No network captures yet. Click "Start Capture" and browse the application.
+                  </div>
+                ) : (
+                  captures.map(c => (
+                    <div
+                      key={c.capture_id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 16px',
+                        borderBottom: `1px solid ${colors.border}`,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, overflow: 'hidden' }}>
+                        <span
+                          style={{
+                            color: c.request.method === 'GET' ? colors.primaryLight : colors.accent,
+                            fontWeight: 700,
+                            width: 50,
+                          }}
+                        >
+                          {c.request.method}
+                        </span>
+                        <span style={{ color: colors.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.request.sanitized_url}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <span style={{ color: c.response.status === 200 ? colors.success : colors.error, fontWeight: 600 }}>
+                          {c.response.status}
+                        </span>
+                        <span style={{ color: colors.textDim }}>{c.response.body_size} B</span>
+                        {c.response.body_hash && (
+                          <button
+                            onClick={() => handleShowRaw(c.response.body_hash, '/')}
+                            style={{
+                              background: 'transparent',
+                              border: `1px solid ${colors.borderLight}`,
+                              color: colors.primaryLight,
+                              borderRadius: 4,
+                              padding: '2px 8px',
+                              fontSize: 11,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Inspect Body
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Candidates View */}
+          {activeView === 'candidates' && (
+            <div style={{ flex: 1, padding: 20, overflowY: 'auto' }}>
+              <h2 style={{ margin: '0 0 16px 0', fontSize: 18, color: colors.text }}>Discovered Candidate Collections</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 16 }}>
+                {candidatesList.length === 0 ? (
+                  <div style={{ color: colors.textDim, padding: 20 }}>No dataset candidates detected yet.</div>
+                ) : (
+                  candidatesList.map(({ capture, candidates }, i) =>
+                    candidates.map((cand, j) => (
+                      <div
+                        key={`${i}-${j}`}
+                        style={{
+                          background: colors.cardBg,
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: 8,
+                          padding: 16,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 12,
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 16, fontWeight: 700, color: colors.primaryLight }}>
+                            {cand.suggested_name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: 4,
+                              background: cand.confidence === 'high' ? `${colors.success}22` : `${colors.warning}22`,
+                              color: cand.confidence === 'high' ? colors.success : colors.warning,
+                            }}
+                          >
+                            {cand.confidence.toUpperCase()} CONFIDENCE
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, fontFamily: fonts.mono, color: colors.textMuted }}>
+                          <div>Pointer: {cand.pointer}</div>
+                          <div>Endpoint: {capture.request.route_template || capture.request.sanitized_url}</div>
+                          <div>Rows: {cand.row_count} | Fields: {cand.field_count}</div>
+                        </div>
+                        <button
+                          onClick={() => handleCreateDataset(cand, capture)}
+                          style={{
+                            background: colors.primary,
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 6,
+                            padding: '8px 12px',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          + Create Dataset Table
+                        </button>
+                      </div>
+                    ))
+                  )
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Dataset Table View */}
+          {activeView === 'datasets' && activeSnapshotData && activeDataset && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <DatasetHeader
+                snapshot={activeSnapshotData.snapshot}
+                onExport={format => {
+                  if (format === 'csv') {
+                    const csv = serializeToCsv(activeSnapshotData.rows, activeSnapshotData.snapshot.schema, true);
+                    setExportModalContent({ title: `${activeDataset.name}.csv`, text: csv });
+                  } else if (format === 'jsonl') {
+                    const jsonl = serializeToJsonl(activeSnapshotData.rows, activeSnapshotData.snapshot.schema, true);
+                    setExportModalContent({ title: `${activeDataset.name}.jsonl`, text: jsonl });
+                  } else if (format === 'parquet') {
+                    duckdbClient.exportParquet(activeDataset.name).then(buf => {
+                      setExportModalContent({
+                        title: `${activeDataset.name}.parquet`,
+                        text: `Parquet binary generated (${buf.length} bytes ready for download).`,
+                      });
+                    });
+                  }
+                }}
+                onGenerateCode={type => {
+                  if (type === 'ts') {
+                    const ts = generateTypeScriptInterface(activeDataset.name, activeSnapshotData.snapshot.schema);
+                    setExportModalContent({ title: `${activeDataset.name}.d.ts`, text: ts });
+                  } else {
+                    const js = generateJsonSchema(activeDataset.name, activeSnapshotData.snapshot.schema);
+                    setExportModalContent({
+                      title: `${activeDataset.name}.schema.json`,
+                      text: JSON.stringify(js, null, 2),
+                    });
+                  }
+                }}
+              />
+              <div style={{ flex: 1, padding: 16, overflow: 'hidden' }}>
+                <VirtualizedTable
+                  schema={activeSnapshotData.snapshot.schema}
+                  rows={activeSnapshotData.rows}
+                  onSelectRowSource={row => setSelectedRow(row)}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* SQL Workspace View */}
+          {activeView === 'sql' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, gap: 16, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2 style={{ margin: 0, fontSize: 18, color: colors.text }}>DuckDB SQL Workspace</h2>
+                <button
+                  onClick={handleRunQuery}
+                  style={{
+                    background: colors.primary,
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '8px 18px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ▶ Run SQL (Ctrl+Enter)
+                </button>
+              </div>
+
+              <textarea
+                value={sqlQuery}
+                onChange={e => setSqlQuery(e.target.value)}
+                style={{
+                  height: 120,
+                  background: colors.cardBg,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 8,
+                  padding: 12,
+                  fontFamily: fonts.mono,
+                  fontSize: 13,
+                  color: colors.text,
+                  resize: 'none',
+                  outline: 'none',
+                }}
+              />
+
+              {sqlError && (
+                <div style={{ background: `${colors.error}22`, border: `1px solid ${colors.error}66`, color: colors.error, padding: 12, borderRadius: 6, fontSize: 12, fontFamily: fonts.mono }}>
+                  {sqlError}
+                </div>
+              )}
+
+              {sqlResult && (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ padding: '8px 16px', background: colors.panelBg, borderBottom: `1px solid ${colors.border}`, fontSize: 12, color: colors.textDim, fontFamily: fonts.mono }}>
+                    Returned {sqlResult.rows.length} rows in {sqlResult.durationMs}ms
+                  </div>
+                  <div style={{ flex: 1, overflow: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: fonts.mono }}>
+                      <thead>
+                        <tr style={{ background: colors.panelBg }}>
+                          {sqlResult.columns.map(col => (
+                            <th key={col} style={{ padding: '8px 12px', textAlign: 'left', borderBottom: `1px solid ${colors.border}`, color: colors.textMuted }}>
+                              {col}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sqlResult.rows.map((r, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${colors.border}33`, background: i % 2 === 0 ? colors.cardBg : colors.panelBg }}>
+                            {sqlResult.columns.map(col => (
+                              <td key={col} style={{ padding: '6px 12px', color: colors.text }}>
+                                {String(r[col] ?? '')}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* Row Provenance Drawer */}
+      <ProvenanceDrawer
+        row={selectedRow}
+        onClose={() => setSelectedRow(null)}
+        onShowRawResponse={(hash, pointer) => handleShowRaw(hash, pointer)}
+      />
+
+      {/* Raw Response Modal */}
+      {rawViewerData && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000,
+          }}
+        >
+          <div
+            style={{
+              width: 800,
+              height: 600,
+              background: colors.panelBg,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 8,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: colors.cardBg, borderBottom: `1px solid ${colors.border}` }}>
+              <strong style={{ color: colors.text }}>Raw Response Body Inspector</strong>
+              <button onClick={() => setRawViewerData(null)} style={{ background: 'transparent', border: 'none', color: colors.textDim, cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+            <div style={{ flex: 1, padding: 16, overflow: 'hidden' }}>
+              <JsonTreeViewer data={rawViewerData.body} highlightPointer={rawViewerData.pointer} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export / Code Modal */}
+      {exportModalContent && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000,
+          }}
+        >
+          <div
+            style={{
+              width: 700,
+              height: 500,
+              background: colors.panelBg,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 8,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: colors.cardBg, borderBottom: `1px solid ${colors.border}` }}>
+              <strong style={{ color: colors.text }}>{exportModalContent.title}</strong>
+              <button onClick={() => setExportModalContent(null)} style={{ background: 'transparent', border: 'none', color: colors.textDim, cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+            <div style={{ flex: 1, padding: 16, overflow: 'hidden' }}>
+              <textarea
+                readOnly
+                value={exportModalContent.text}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  background: colors.cardBg,
+                  color: colors.text,
+                  fontFamily: fonts.mono,
+                  fontSize: 12,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 6,
+                  padding: 12,
+                  outline: 'none',
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom Status Bar */}
+      <StatusBar
+        workspaceName={workspaceName}
+        isCapturing={isCapturing}
+        captureCount={captures.length}
+        datasetCount={definitions.length}
+        totalBytes={totalBodyBytes}
+      />
+    </div>
+  );
+}

@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/workspace" },
+    { "path": "./packages/duckdb" },
+    { "path": "./packages/ui" },
+    { "path": "./apps/fixture-app" },
+    { "path": "./apps/extension" }
+  ]
+}

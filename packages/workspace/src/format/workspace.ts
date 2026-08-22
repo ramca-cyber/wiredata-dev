@@ -1,0 +1,321 @@
+/**
+ * Canonical Workspace Format File Serializer & Manager
+ * Supports FileSystemDirectoryHandle and in-memory mock for automated testing
+ */
+
+import {
+  CapturedRequest,
+  CaptureSession,
+  DatasetDefinition,
+  DatasetSnapshot,
+  ExtractedRow,
+  generateULID,
+  SavedQuery,
+  ULID,
+  WorkspaceMetadata,
+} from '@wiredata/core';
+import { IWorkspaceStorage } from '../types.js';
+
+export interface IFileAdapter {
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, content: string): Promise<void>;
+  listFiles(dirPath: string): Promise<string[]>;
+  deleteFile(path: string): Promise<void>;
+  createDir(dirPath: string): Promise<void>;
+}
+
+/**
+ * In-memory adapter for unit testing and Node execution
+ */
+export class InMemoryFileAdapter implements IFileAdapter {
+  private files = new Map<string, string>();
+
+  async readFile(path: string): Promise<string | null> {
+    return this.files.get(path) ?? null;
+  }
+
+  async writeFile(path: string, content: string): Promise<void> {
+    this.files.set(path, content);
+  }
+
+  async listFiles(dirPath: string): Promise<string[]> {
+    const normalizedDir = dirPath.endsWith('/') ? dirPath : `${dirPath}/`;
+    const results = new Set<string>();
+    for (const key of this.files.keys()) {
+      if (key.startsWith(normalizedDir)) {
+        const sub = key.slice(normalizedDir.length);
+        const nextSlash = sub.indexOf('/');
+        const item = nextSlash === -1 ? sub : sub.slice(0, nextSlash);
+        results.add(item);
+      }
+    }
+    return Array.from(results);
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    this.files.delete(path);
+  }
+
+  async createDir(): Promise<void> {
+    // No-op for flat map
+  }
+}
+
+/**
+ * FileSystemDirectoryHandle adapter for Chromium File System Access API
+ */
+export class FSDirectoryAdapter implements IFileAdapter {
+  constructor(private rootHandle: any) {}
+
+  private async getDirectoryHandle(pathSegments: string[], create: boolean = false): Promise<any> {
+    let current = this.rootHandle;
+    for (const seg of pathSegments) {
+      if (!seg) continue;
+      current = await current.getDirectoryHandle(seg, { create });
+    }
+    return current;
+  }
+
+  async readFile(path: string): Promise<string | null> {
+    try {
+      const segments = path.split('/').filter(Boolean);
+      const fileName = segments.pop()!;
+      const dir = await this.getDirectoryHandle(segments, false);
+      const fileHandle = await dir.getFileHandle(fileName);
+      const file = await fileHandle.getFile();
+      return await file.text();
+    } catch {
+      return null;
+    }
+  }
+
+  async writeFile(path: string, content: string): Promise<void> {
+    const segments = path.split('/').filter(Boolean);
+    const fileName = segments.pop()!;
+    const dir = await this.getDirectoryHandle(segments, true);
+    const fileHandle = await dir.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+  }
+
+  async listFiles(dirPath: string): Promise<string[]> {
+    try {
+      const segments = dirPath.split('/').filter(Boolean);
+      const dir = await this.getDirectoryHandle(segments, false);
+      const names: string[] = [];
+      for await (const [name] of dir.entries()) {
+        names.push(name);
+      }
+      return names;
+    } catch {
+      return [];
+    }
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    try {
+      const segments = path.split('/').filter(Boolean);
+      const fileName = segments.pop()!;
+      const dir = await this.getDirectoryHandle(segments, false);
+      await dir.removeEntry(fileName);
+    } catch {}
+  }
+
+  async createDir(dirPath: string): Promise<void> {
+    const segments = dirPath.split('/').filter(Boolean);
+    await this.getDirectoryHandle(segments, true);
+  }
+}
+
+/**
+ * Structured Workspace Manager
+ */
+export class WorkspaceManager implements IWorkspaceStorage {
+  constructor(private adapter: IFileAdapter) {}
+
+  async initializeWorkspace(metadata?: Partial<WorkspaceMetadata>): Promise<void> {
+    const meta: WorkspaceMetadata = {
+      format_version: 1,
+      workspace_id: metadata?.workspace_id || generateULID(),
+      created_at: metadata?.created_at || new Date().toISOString(),
+      last_opened_at: new Date().toISOString(),
+      application_version: '0.1.0',
+    };
+    await this.adapter.writeFile('workspace.json', JSON.stringify(meta, null, 2));
+    await this.adapter.createDir('sessions');
+    await this.adapter.createDir('objects');
+    await this.adapter.createDir('datasets');
+    await this.adapter.createDir('queries');
+    await this.adapter.createDir('exports');
+  }
+
+  async getMetadata(): Promise<WorkspaceMetadata | null> {
+    const content = await this.adapter.readFile('workspace.json');
+    if (!content) return null;
+    try {
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveSession(session: CaptureSession): Promise<void> {
+    const sessionDir = `sessions/${session.session_id}`;
+    await this.adapter.createDir(sessionDir);
+    await this.adapter.writeFile(`${sessionDir}/session.json`, JSON.stringify(session, null, 2));
+  }
+
+  async listSessions(): Promise<CaptureSession[]> {
+    const sessionIds = await this.adapter.listFiles('sessions');
+    const sessions: CaptureSession[] = [];
+    for (const sid of sessionIds) {
+      const content = await this.adapter.readFile(`sessions/${sid}/session.json`);
+      if (content) {
+        try {
+          sessions.push(JSON.parse(content));
+        } catch {}
+      }
+    }
+    return sessions.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+  }
+
+  async getSession(sessionId: ULID): Promise<CaptureSession | null> {
+    const content = await this.adapter.readFile(`sessions/${sessionId}/session.json`);
+    if (!content) return null;
+    try {
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteSession(sessionId: ULID): Promise<void> {
+    await this.adapter.deleteFile(`sessions/${sessionId}/session.json`);
+  }
+
+  async saveCapture(sessionId: ULID, capture: CapturedRequest, rawBody?: unknown): Promise<void> {
+    const capturesDir = `sessions/${sessionId}/captures`;
+    await this.adapter.createDir(capturesDir);
+    await this.adapter.writeFile(`${capturesDir}/${capture.capture_id}.json`, JSON.stringify(capture, null, 2));
+
+    // Save content-addressed raw body object if provided
+    if (rawBody !== undefined && capture.response.body_hash) {
+      const objPath = `objects/${capture.response.body_hash}.json`;
+      const existing = await this.adapter.readFile(objPath);
+      if (!existing) {
+        await this.adapter.writeFile(objPath, JSON.stringify(rawBody));
+      }
+    }
+  }
+
+  async listCaptures(sessionId: ULID): Promise<CapturedRequest[]> {
+    const capturesDir = `sessions/${sessionId}/captures`;
+    const files = await this.adapter.listFiles(capturesDir);
+    const captures: CapturedRequest[] = [];
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        const content = await this.adapter.readFile(`${capturesDir}/${f}`);
+        if (content) {
+          try {
+            captures.push(JSON.parse(content));
+          } catch {}
+        }
+      }
+    }
+    return captures.sort((a, b) => new Date(a.timing.started_at).getTime() - new Date(b.timing.started_at).getTime());
+  }
+
+  async getBodyObject(bodyHash: string): Promise<unknown | null> {
+    const content = await this.adapter.readFile(`objects/${bodyHash}.json`);
+    if (!content) return null;
+    try {
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveDatasetDefinition(definition: DatasetDefinition): Promise<void> {
+    const dsDir = `datasets/${definition.id}`;
+    await this.adapter.createDir(dsDir);
+    await this.adapter.writeFile(`${dsDir}/definition.json`, JSON.stringify(definition, null, 2));
+  }
+
+  async listDatasetDefinitions(): Promise<DatasetDefinition[]> {
+    const ids = await this.adapter.listFiles('datasets');
+    const defs: DatasetDefinition[] = [];
+    for (const id of ids) {
+      const content = await this.adapter.readFile(`datasets/${id}/definition.json`);
+      if (content) {
+        try {
+          defs.push(JSON.parse(content));
+        } catch {}
+      }
+    }
+    return defs;
+  }
+
+  async getDatasetDefinition(datasetId: string): Promise<DatasetDefinition | null> {
+    const content = await this.adapter.readFile(`datasets/${datasetId}/definition.json`);
+    if (!content) return null;
+    try {
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveDatasetSnapshot(snapshot: DatasetSnapshot, rows: ExtractedRow[]): Promise<void> {
+    const snapshotDir = `datasets/${snapshot.dataset_id}/snapshots`;
+    await this.adapter.createDir(snapshotDir);
+    await this.adapter.writeFile(
+      `${snapshotDir}/${snapshot.snapshot_id}.json`,
+      JSON.stringify({ snapshot, rows }, null, 2)
+    );
+  }
+
+  async getDatasetSnapshot(
+    datasetId: string,
+    snapshotId: ULID
+  ): Promise<{ snapshot: DatasetSnapshot; rows: ExtractedRow[] } | null> {
+    const content = await this.adapter.readFile(`datasets/${datasetId}/snapshots/${snapshotId}.json`);
+    if (!content) return null;
+    try {
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async saveQuery(query: SavedQuery): Promise<void> {
+    await this.adapter.createDir('queries');
+    await this.adapter.writeFile(`queries/${query.name}.sql`, query.sql_text);
+    await this.adapter.writeFile(`queries/${query.name}.json`, JSON.stringify(query, null, 2));
+  }
+
+  async listQueries(): Promise<SavedQuery[]> {
+    const files = await this.adapter.listFiles('queries');
+    const queries: SavedQuery[] = [];
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        const content = await this.adapter.readFile(`queries/${f}`);
+        if (content) {
+          try {
+            queries.push(JSON.parse(content));
+          } catch {}
+        }
+      }
+    }
+    return queries;
+  }
+
+  async deleteQuery(queryId: ULID): Promise<void> {
+    const queries = await this.listQueries();
+    const target = queries.find(q => q.query_id === queryId);
+    if (target) {
+      await this.adapter.deleteFile(`queries/${target.name}.sql`);
+      await this.adapter.deleteFile(`queries/${target.name}.json`);
+    }
+  }
+}

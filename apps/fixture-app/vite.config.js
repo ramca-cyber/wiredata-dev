@@ -1,0 +1,46 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { handleMockRequest } from './src/mock-server';
+function mockApiPlugin() {
+    return {
+        name: 'mock-api-plugin',
+        configureServer(server) {
+            server.middlewares.use(async (req, res, next) => {
+                const url = req.url || '';
+                if (url.startsWith('/api/') || url.startsWith('/graphql')) {
+                    let body = '';
+                    req.on('data', chunk => (body += chunk));
+                    req.on('end', async () => {
+                        try {
+                            const response = await handleMockRequest({
+                                method: req.method || 'GET',
+                                url,
+                                body,
+                                headers: req.headers,
+                            });
+                            res.statusCode = response.status;
+                            for (const [k, v] of Object.entries(response.headers)) {
+                                res.setHeader(k, v);
+                            }
+                            res.end(response.body);
+                        }
+                        catch (err) {
+                            res.statusCode = 500;
+                            res.setHeader('Content-Type', 'application/json');
+                            res.end(JSON.stringify({ error: err.message }));
+                        }
+                    });
+                    return;
+                }
+                next();
+            });
+        },
+    };
+}
+export default defineConfig({
+    plugins: [react(), mockApiPlugin()],
+    server: {
+        port: 5173,
+    },
+});
+//# sourceMappingURL=vite.config.js.map

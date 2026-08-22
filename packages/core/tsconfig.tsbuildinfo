@@ -1,0 +1,1 @@
+{"root":["./src/index.ts","./src/capture/redact.ts","./src/datasets/builder.ts","./src/datasets/dedup.ts","./src/datasets/flatten.ts","./src/export/generators.ts","./src/inference/candidate.ts","./src/inference/route.ts","./src/inference/typing.ts","./src/json/pointer.ts","./src/types/index.ts","./src/utils/hash.ts","./src/utils/ulid.ts"],"version":"5.9.3"}
