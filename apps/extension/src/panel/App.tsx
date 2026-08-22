@@ -113,6 +113,93 @@ export default function App() {
     }
   };
 
+  // Ingest Simulated Fixture Traffic (for standalone testing / browser verification)
+  const ingestCapturedData = (capture: CapturedRequest, rawBody?: unknown, candidates?: CandidateCollection[]) => {
+    setCaptures(prev => [capture, ...prev]);
+    if (rawBody !== undefined && capture.response.body_hash) {
+      responseBodiesRef.current.set(capture.response.body_hash, rawBody);
+      if (activeSession) {
+        workspaceManager.saveCapture(activeSession.session_id, capture, rawBody);
+      }
+    }
+    if (candidates && candidates.length > 0) {
+      setCandidatesList(prev => [{ capture, candidates }, ...prev]);
+    }
+  };
+
+  const handleSimulateFixtureTraffic = async () => {
+    if (!activeSession) return;
+
+    const urls = [
+      { url: 'http://localhost:5173/api/orders?page=1', method: 'GET' },
+      { url: 'http://localhost:5173/api/orders?page=2', method: 'GET' },
+      { url: 'http://localhost:5173/api/orders?page=3', method: 'GET' },
+      { url: 'http://localhost:5173/api/orders/9182/items', method: 'GET' },
+      { url: 'http://localhost:5173/api/customers/44', method: 'GET' },
+      { url: 'http://localhost:5173/api/duplicates', method: 'GET' },
+      { url: 'http://localhost:5173/api/mixed-types', method: 'GET' },
+      {
+        url: 'http://localhost:5173/graphql',
+        method: 'POST',
+        body: JSON.stringify({ operationName: 'OrdersQuery', query: 'query OrdersQuery { orders { id status total } }' }),
+      },
+    ];
+
+    for (const item of urls) {
+      try {
+        const res = await fetch(item.url, {
+          method: item.method,
+          headers: { 'Content-Type': 'application/json' },
+          body: item.body,
+        });
+        const rawJson = await res.json();
+        const jsonStr = JSON.stringify(rawJson);
+        const { sha256, computeNormalizedRoute, extractGraphQLOperation, generateULID, detectCandidateCollections } = await import('@wiredata/core');
+        const hash = await sha256(jsonStr);
+        const graphqlOp = item.body ? extractGraphQLOperation(item.body) : undefined;
+        const normalizedRoute = computeNormalizedRoute(item.method, item.url, graphqlOp);
+
+        const capture: CapturedRequest = {
+          capture_id: generateULID(),
+          session_id: activeSession.session_id,
+          request: {
+            url: item.url,
+            sanitized_url: item.url,
+            route_template: normalizedRoute,
+            method: item.method,
+            query_parameters: [],
+            headers: [{ name: 'Content-Type', value: 'application/json', is_redacted: false }],
+            body_sanitized: item.body,
+            graphql_operation_name: graphqlOp,
+          },
+          response: {
+            status: res.status,
+            status_text: res.statusText,
+            mime_type: 'application/json',
+            headers: [{ name: 'Content-Type', value: 'application/json', is_redacted: false }],
+            body_size: jsonStr.length,
+            body_hash: hash,
+            body_object_ref: hash,
+          },
+          timing: {
+            started_at: new Date().toISOString(),
+            completed_at: new Date().toISOString(),
+            duration_ms: 45,
+          },
+          classification: {
+            json_candidate: true,
+            parse_status: 'parsed',
+          },
+        };
+
+        const candidates = detectCandidateCollections(rawJson);
+        ingestCapturedData(capture, rawJson, candidates);
+      } catch (err: any) {
+        console.warn('Simulation fetch error:', err);
+      }
+    }
+  };
+
   // Toggle Capture
   const toggleCapture = () => {
     if (isCapturing) {
@@ -128,15 +215,7 @@ export default function App() {
       const adapter = new ChromeNetworkCaptureAdapter(
         activeSession.session_id,
         (capture, rawBody, candidates) => {
-          setCaptures(prev => [capture, ...prev]);
-          if (rawBody !== undefined && capture.response.body_hash) {
-            responseBodiesRef.current.set(capture.response.body_hash, rawBody);
-            workspaceManager.saveCapture(activeSession.session_id, capture, rawBody);
-          }
-
-          if (candidates && candidates.length > 0) {
-            setCandidatesList(prev => [{ capture, candidates }, ...prev]);
-          }
+          ingestCapturedData(capture, rawBody, candidates);
         }
       );
       adapter.start();
@@ -259,6 +338,24 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            onClick={handleSimulateFixtureTraffic}
+            style={{
+              background: colors.cardBg,
+              color: colors.primaryLight,
+              border: `1px solid ${colors.primary}66`,
+              borderRadius: 6,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            ⚡ Ingest Fixture Data
+          </button>
           <button
             onClick={handleSelectWorkspace}
             style={{

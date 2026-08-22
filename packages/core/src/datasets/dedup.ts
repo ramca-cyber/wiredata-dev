@@ -59,11 +59,11 @@ export function deduplicateRows(
       // Sort or pick based on policy
       let survivingIndex = 0;
       if (policy === 'keep_latest') {
-        // Find newest by captured_at
+        // Find newest by captured_at (tie-breaker: later array position is latest)
         let newestTime = -Infinity;
         group.forEach((r, idx) => {
           const t = new Date(r.lineage.captured_at).getTime();
-          if (t > newestTime) {
+          if (t >= newestTime) {
             newestTime = t;
             survivingIndex = idx;
           }
