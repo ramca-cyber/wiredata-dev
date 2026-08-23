@@ -109,7 +109,7 @@ export class ChromeNetworkCaptureAdapter {
 
     // Retrieve JSON response body
     harEntry.getContent(async (content: string, encoding: string) => {
-      let rawJson: unknown = undefined;
+      let sanitizedJson: unknown = undefined;
       let parseStatus: CapturedRequest['classification']['parse_status'] = 'parsed';
       let bodyHash = '';
 
@@ -118,13 +118,14 @@ export class ChromeNetworkCaptureAdapter {
       } else {
         try {
           const decoded = encoding === 'base64' ? atob(content) : content;
-          bodyHash = await sha256(decoded);
 
           // Check size threshold (25 MiB default limit)
           if (decoded.length > 25 * 1024 * 1024) {
             parseStatus = 'skipped_large';
           } else {
-            rawJson = JSON.parse(decoded);
+            // Redact sensitive keys before this ever touches persistence or hashing
+            sanitizedJson = redactJsonBody(JSON.parse(decoded));
+            bodyHash = await sha256(JSON.stringify(sanitizedJson));
           }
         } catch {
           parseStatus = 'invalid_json';
@@ -160,17 +161,17 @@ export class ChromeNetworkCaptureAdapter {
           duration_ms: Math.round(time || 0),
         },
         classification: {
-          json_candidate: parseStatus === 'parsed' && rawJson !== undefined,
+          json_candidate: parseStatus === 'parsed' && sanitizedJson !== undefined,
           parse_status: parseStatus,
         },
       };
 
       let candidates: ReturnType<typeof detectCandidateCollections> | undefined;
-      if (rawJson !== undefined) {
-        candidates = detectCandidateCollections(rawJson);
+      if (sanitizedJson !== undefined) {
+        candidates = detectCandidateCollections(sanitizedJson);
       }
 
-      this.onCapture(capture, rawJson, candidates);
+      this.onCapture(capture, sanitizedJson, candidates);
     });
   }
 }

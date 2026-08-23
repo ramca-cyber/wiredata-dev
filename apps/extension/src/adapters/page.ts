@@ -9,6 +9,7 @@ import {
   computeNormalizedRoute,
   detectCandidateCollections,
   generateULID,
+  redactJsonBody,
   sha256,
   ULID,
 } from '@wiredata/core';
@@ -68,7 +69,9 @@ export class PageNetworkCaptureAdapter {
   }
 
   private async handlePayload(p: any): Promise<void> {
-    const jsonStr = JSON.stringify(p.body);
+    // Redact sensitive keys before this ever touches persistence or hashing
+    const sanitizedBody = redactJsonBody(p.body);
+    const jsonStr = JSON.stringify(sanitizedBody);
     const hash = await sha256(jsonStr);
     const normalizedRoute = computeNormalizedRoute(p.method, p.url, p.graphqlOperationName);
 
@@ -106,7 +109,7 @@ export class PageNetworkCaptureAdapter {
       },
     };
 
-    const candidates = detectCandidateCollections(p.body);
-    this.onCapture(capture, p.body, candidates);
+    const candidates = detectCandidateCollections(sanitizedBody);
+    this.onCapture(capture, sanitizedBody, candidates);
   }
 }

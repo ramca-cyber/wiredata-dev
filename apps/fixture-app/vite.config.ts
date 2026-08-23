@@ -6,6 +6,7 @@ import { handleMockRequest } from './src/mock-server';
 function mockApiPlugin(): Plugin {
   return {
     name: 'mock-api-plugin',
+    configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url || '';
         if (url.startsWith('/api/') || url.startsWith('/graphql')) {
@@ -45,6 +46,7 @@ function mockApiPlugin(): Plugin {
         }
         next();
       });
+    },
   };
 }
 
