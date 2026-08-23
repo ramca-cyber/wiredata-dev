@@ -9,6 +9,7 @@ import {
   CapturedRequest,
   CaptureSession,
   generateULID,
+  redactQueryParams,
   ULID,
 } from '@wiredata/core';
 import {
@@ -24,6 +25,7 @@ export function SidePanelApp() {
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   // Metrics
   const [captureCount, setCaptureCount] = useState<number>(0);
@@ -35,10 +37,34 @@ export function SidePanelApp() {
     () => new WorkspaceManager(new InMemoryFileAdapter())
   );
   const [workspaceName, setWorkspaceName] = useState<string>('In-Memory Working Session');
+  // Capture is disabled until a real, persisted folder is attached. The
+  // in-memory adapter exists for tests/dev only — starting a capture against
+  // it means a user can record data, close the panel, and lose all of it.
+  const [hasPersistentWorkspace, setHasPersistentWorkspace] = useState<boolean>(false);
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
 
-  // 1. Detect current active tab and initialize workspace
+  const attachCaptureCallback = (sessionId: ULID, wm: WorkspaceManager) => (
+    capture: CapturedRequest,
+    rawBody: unknown,
+    candidates: CandidateCollection[]
+  ) => {
+    setCaptureCount(prev => prev + 1);
+    setTotalBytes(prev => prev + (capture.response.body_size || 0));
+
+    for (const cand of candidates) {
+      setDetectedCollections(prev => {
+        const next = new Map(prev);
+        const cur = next.get(cand.suggested_name) || 0;
+        next.set(cand.suggested_name, cur + cand.row_count);
+        return next;
+      });
+    }
+
+    wm.saveCapture(sessionId, capture, rawBody);
+  };
+
+  // 1. Detect current active tab, initialize/reconcile workspace and session state
   useEffect(() => {
     const init = async () => {
       // Query active tab
@@ -57,26 +83,22 @@ export function SidePanelApp() {
         }
       }
 
-      // Check ephemeral session state from service worker
-      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'GET_SESSION_STATE' }, (sessionState) => {
-          if (sessionState?.isCapturing) {
-            setIsCapturing(true);
-          }
-        });
-      }
-
-      // Restore workspace handle
+      // Restore workspace handle (requires readwrite: this panel writes captures,
+      // datasets, and exports, not just reads them)
+      let wm = workspaceManager;
       try {
         const cachedHandle = await DirectoryHandleManager.loadHandle();
         if (cachedHandle) {
-          const verified = await DirectoryHandleManager.verifyPermission(cachedHandle, 'read');
+          const verified = await DirectoryHandleManager.verifyPermission(cachedHandle, 'readwrite');
           if (verified) {
             const fsAdapter = new FSDirectoryAdapter(cachedHandle);
-            const wm = new WorkspaceManager(fsAdapter);
+            wm = new WorkspaceManager(fsAdapter);
             await wm.openOrCreateWorkspace();
             setWorkspaceManager(wm);
             setWorkspaceName((cachedHandle as any).name || 'Workspace Folder');
+            setHasPersistentWorkspace(true);
+          } else {
+            await workspaceManager.openOrCreateWorkspace();
           }
         } else {
           await workspaceManager.openOrCreateWorkspace();
@@ -84,22 +106,74 @@ export function SidePanelApp() {
       } catch {
         await workspaceManager.openOrCreateWorkspace();
       }
+
+      // Check the service worker's live ephemeral session state. The worker
+      // itself can be killed and restarted at any time, so this is the
+      // authoritative source for "is a capture actually running right now" —
+      // not anything we might have persisted to disk previously.
+      let liveState: { isCapturing: boolean; activeTabId: number | null; activeSessionId: string | null } | null = null;
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        try {
+          liveState = await chrome.runtime.sendMessage({ type: 'GET_SESSION_STATE' });
+        } catch {}
+      }
+
+      // Reconcile any sessions this panel previously wrote as 'capturing' that
+      // the service worker no longer considers active (panel/tab closed, tab
+      // navigated origin, or the worker restarted mid-capture without ever
+      // getting a chance to finalize the persisted session on disk).
+      try {
+        const sessions = await wm.listSessions();
+        for (const session of sessions) {
+          if (session.status !== 'capturing') continue;
+          const stillLive = liveState?.isCapturing && liveState.activeSessionId === session.session_id;
+          if (!stillLive) {
+            await wm.saveSession({ ...session, status: 'recovered', ended_at: session.ended_at || new Date().toISOString() });
+          } else {
+            // Resume reflecting the live session in this panel, and reattach
+            // a real adapter so Stop Capture actually has something to stop —
+            // without this, a panel reopened mid-capture shows "capturing"
+            // but pressing Stop is a no-op.
+            const existingCaptures = await wm.listCaptures(session.session_id);
+            const bytes = existingCaptures.reduce((acc, c) => acc + (c.response.body_size || 0), 0);
+            setActiveSession(session);
+            setCaptureCount(existingCaptures.length);
+            setTotalBytes(bytes);
+            if (liveState?.activeTabId) {
+              const adapter = new PageNetworkCaptureAdapter(
+                session.session_id,
+                liveState.activeTabId,
+                session.initial_page_url,
+                attachCaptureCallback(session.session_id, wm)
+              );
+              adapterRef.current = adapter;
+            }
+            setIsCapturing(true);
+          }
+        }
+      } catch {}
     };
 
     init();
 
-    // Listen for broadcast messages from service worker
-    const port = typeof chrome !== 'undefined' && chrome.runtime?.connect ? chrome.runtime.connect({ name: 'wiredata_ui_channel' }) : null;
-    if (port) {
-      port.onMessage.addListener(msg => {
-        if (msg.type === 'CAPTURE_STATUS_CHANGED') {
-          setIsCapturing(msg.isCapturing);
-        }
-      });
+    // Listen for broadcasts from the service worker. Delivery is plain
+    // runtime messages, not a long-lived port — the worker can be killed
+    // and restarted between messages at any time, and a port held open in
+    // its global scope would silently stop being able to deliver anything
+    // the moment that happens.
+    const listener = (msg: any) => {
+      if (msg?.type === 'CAPTURE_STATUS_CHANGED') {
+        setIsCapturing(msg.isCapturing);
+      }
+    };
+    if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(listener);
     }
 
     return () => {
-      if (port) port.disconnect();
+      if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+        chrome.runtime.onMessage.removeListener(listener);
+      }
     };
   }, []);
 
@@ -112,6 +186,7 @@ export function SidePanelApp() {
       await wm.openOrCreateWorkspace();
       setWorkspaceManager(wm);
       setWorkspaceName((handle as any).name || 'Selected Folder');
+      setHasPersistentWorkspace(true);
     } catch (err: any) {
       console.warn('Directory picker cancelled:', err.message);
     }
@@ -119,6 +194,8 @@ export function SidePanelApp() {
 
   // Toggle Page Capture
   const handleToggleCapture = async () => {
+    setStartError(null);
+
     if (isCapturing) {
       // Stop
       if (adapterRef.current) {
@@ -137,8 +214,12 @@ export function SidePanelApp() {
       }
     } else {
       // Start
+      if (!hasPersistentWorkspace) {
+        setStartError('Choose a workspace folder before starting capture.');
+        return;
+      }
       if (!activeTab?.id || !activeTab.url) {
-        alert('Please open an active web page tab first.');
+        setStartError('Please open an active web page tab first.');
         return;
       }
 
@@ -147,38 +228,34 @@ export function SidePanelApp() {
         session_id: sessionId,
         name: `Page Capture: ${new URL(activeTab.url).hostname}`,
         started_at: new Date().toISOString(),
-        initial_page_url: activeTab.url,
+        initial_page_url: redactQueryParams(activeTab.url).sanitizedUrl,
         navigation_history: [],
         capture_count: 0,
         body_bytes: 0,
         application_version: '0.1.0',
         status: 'capturing',
       };
-      setActiveSession(session);
-      await workspaceManager.saveSession(session);
 
       const adapter = new PageNetworkCaptureAdapter(
         sessionId,
         activeTab.id,
         activeTab.url,
-        (capture: CapturedRequest, rawBody: unknown, candidates: CandidateCollection[]) => {
-          setCaptureCount(prev => prev + 1);
-          setTotalBytes(prev => prev + (capture.response.body_size || 0));
-
-          for (const cand of candidates) {
-            setDetectedCollections(prev => {
-              const next = new Map(prev);
-              const cur = next.get(cand.suggested_name) || 0;
-              next.set(cand.suggested_name, cur + cand.row_count);
-              return next;
-            });
-          }
-
-          workspaceManager.saveCapture(sessionId, capture, rawBody);
-        }
+        attachCaptureCallback(sessionId, workspaceManager)
       );
 
-      await adapter.start();
+      // Only report capture as active, and only persist the session, once
+      // the service worker has confirmed the hook actually installed —
+      // injection can fail (restricted page, expired activeTab grant, etc.)
+      // and the UI must not claim to be recording when nothing is happening.
+      try {
+        await adapter.start();
+      } catch (err: any) {
+        setStartError(err?.message || 'Failed to start capture on this tab.');
+        return;
+      }
+
+      setActiveSession(session);
+      await workspaceManager.saveSession(session);
       adapterRef.current = adapter;
       setIsCapturing(true);
     }
@@ -286,7 +363,7 @@ export function SidePanelApp() {
 
         <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
           {isCapturing
-            ? 'Recording JSON fetch & XHR responses requested by this page. Request headers and passwords are never collected.'
+            ? 'Recording JSON fetch & XHR responses requested by this page. Request headers and credentials are never collected.'
             : 'Capture is off. WireData is not recording network data from this tab.'}
         </p>
 
@@ -301,22 +378,55 @@ export function SidePanelApp() {
           </div>
         )}
 
-        <button
-          onClick={handleToggleCapture}
-          style={{
-            background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '10px 16px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
-          }}
-        >
-          {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
-        </button>
+        {startError && (
+          <div
+            style={{
+              fontSize: 12,
+              color: colors.error,
+              background: `${colors.error}11`,
+              border: `1px solid ${colors.error}44`,
+              borderRadius: 6,
+              padding: '8px 10px',
+            }}
+          >
+            {startError}
+          </div>
+        )}
+
+        {!hasPersistentWorkspace && !isCapturing ? (
+          <button
+            onClick={handleSelectWorkspace}
+            style={{
+              background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '10px 16px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            📁 Choose Workspace to Enable Capture
+          </button>
+        ) : (
+          <button
+            onClick={handleToggleCapture}
+            style={{
+              background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '10px 16px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
+            }}
+          >
+            {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
+          </button>
+        )}
       </div>
 
       {/* Detected Datasets Section */}

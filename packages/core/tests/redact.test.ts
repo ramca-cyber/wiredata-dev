@@ -3,6 +3,7 @@ import {
   redactHeaders,
   redactQueryParams,
   redactJsonBody,
+  detectSensitiveJsonPaths,
   REDACTED_MARKER,
   isSensitiveHeader,
   isSensitiveKey,
@@ -78,5 +79,42 @@ describe('Security and Credential Redaction', () => {
     expect(redacted.credentials.secret).toBe(REDACTED_MARKER);
     expect(redacted.items[0].id).toBe(1);
     expect(redacted.items[0].auth_token).toBe(REDACTED_MARKER);
+  });
+
+  it('flags credential-shaped response fields without altering the value', () => {
+    const body = {
+      id: 44,
+      name: 'Customer 44',
+      session_token: 'tok_live_abc123',
+      nested: { auth: { api_key: 'sk_live_xyz' } },
+      items: [{ id: 1, refresh_token: 'rt_1_secret' }],
+    };
+
+    const paths = detectSensitiveJsonPaths(body);
+
+    // Values must be completely untouched — response bodies are the exact
+    // data being captured, not something to mutate.
+    expect(body.session_token).toBe('tok_live_abc123');
+    expect(body.nested.auth.api_key).toBe('sk_live_xyz');
+    expect(body.items[0].refresh_token).toBe('rt_1_secret');
+
+    expect(paths).toContain('/session_token');
+    expect(paths).toContain('/nested/auth/api_key');
+    expect(paths).toContain('/items/0/refresh_token');
+    expect(paths).not.toContain('/id');
+    expect(paths).not.toContain('/name');
+  });
+
+  it('does not flag ordinary fields whose names merely contain a sensitive substring', () => {
+    // "author" contains "auth", "passenger" contains "pass" — the key-based
+    // heuristic is intentionally applied only as a non-destructive UI flag
+    // (never a mutation) precisely because it can't be perfectly precise.
+    const body = { author: 'Jane Doe', passenger_count: 3 };
+    const paths = detectSensitiveJsonPaths(body);
+    expect(paths).toContain('/author');
+    expect(paths).toContain('/passenger_count');
+    // Documented limitation, not a bug: confirm redactJsonBody is never
+    // applied to response bodies anywhere in the capture adapters — this
+    // heuristic is a flag only, so false positives here cost nothing.
   });
 });

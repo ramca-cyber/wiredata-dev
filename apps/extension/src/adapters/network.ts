@@ -7,6 +7,7 @@ import {
   CapturedRequest,
   computeNormalizedRoute,
   detectCandidateCollections,
+  detectSensitiveJsonPaths,
   extractGraphQLOperation,
   generateULID,
   redactHeaders,
@@ -109,7 +110,8 @@ export class ChromeNetworkCaptureAdapter {
 
     // Retrieve JSON response body
     harEntry.getContent(async (content: string, encoding: string) => {
-      let sanitizedJson: unknown = undefined;
+      let rawJson: unknown = undefined;
+      let sensitiveFields: string[] = [];
       let parseStatus: CapturedRequest['classification']['parse_status'] = 'parsed';
       let bodyHash = '';
 
@@ -118,14 +120,16 @@ export class ChromeNetworkCaptureAdapter {
       } else {
         try {
           const decoded = encoding === 'base64' ? atob(content) : content;
+          // Hash the exact bytes as received — the response body itself is
+          // stored unmodified, so the hash must address exactly what's stored.
+          bodyHash = await sha256(decoded);
 
           // Check size threshold (25 MiB default limit)
           if (decoded.length > 25 * 1024 * 1024) {
             parseStatus = 'skipped_large';
           } else {
-            // Redact sensitive keys before this ever touches persistence or hashing
-            sanitizedJson = redactJsonBody(JSON.parse(decoded));
-            bodyHash = await sha256(JSON.stringify(sanitizedJson));
+            rawJson = JSON.parse(decoded);
+            sensitiveFields = detectSensitiveJsonPaths(rawJson);
           }
         } catch {
           parseStatus = 'invalid_json';
@@ -161,17 +165,18 @@ export class ChromeNetworkCaptureAdapter {
           duration_ms: Math.round(time || 0),
         },
         classification: {
-          json_candidate: parseStatus === 'parsed' && sanitizedJson !== undefined,
+          json_candidate: parseStatus === 'parsed' && rawJson !== undefined,
           parse_status: parseStatus,
+          sensitive_response_fields: sensitiveFields.length > 0 ? sensitiveFields : undefined,
         },
       };
 
       let candidates: ReturnType<typeof detectCandidateCollections> | undefined;
-      if (sanitizedJson !== undefined) {
-        candidates = detectCandidateCollections(sanitizedJson);
+      if (rawJson !== undefined) {
+        candidates = detectCandidateCollections(rawJson);
       }
 
-      this.onCapture(capture, sanitizedJson, candidates);
+      this.onCapture(capture, rawJson, candidates);
     });
   }
 }

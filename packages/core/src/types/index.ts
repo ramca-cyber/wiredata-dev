@@ -89,6 +89,12 @@ export interface CapturedRequest {
   classification: {
     json_candidate: boolean;
     parse_status: 'parsed' | 'skipped_large' | 'invalid_json' | 'unsupported_mime' | 'body_unavailable';
+    /**
+     * JSON Pointers of response body keys that look credential-shaped
+     * (e.g. "/data/token"). The response body itself is stored exactly as
+     * received — this is a non-destructive flag for the UI, not a redaction.
+     */
+    sensitive_response_fields?: string[];
   };
 }
 

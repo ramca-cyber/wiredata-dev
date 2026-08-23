@@ -1,7 +1,14 @@
 /**
  * WireData Manifest V3 Background Service Worker
  * Coordinates activeTab capture sessions, sidePanel lifecycle, and toolbar badges.
- * Ephemeral session registry stored in chrome.storage.session.
+ * Ephemeral session registry stored in chrome.storage.session so it survives
+ * the service worker being killed and restarted after ~30s of inactivity.
+ *
+ * Delivery to UI surfaces (side panel / workbench) uses chrome.runtime.sendMessage
+ * broadcasts rather than long-lived ports: a port held open in a worker-global Set
+ * is lost the moment the worker is terminated and restarted, silently dropping any
+ * capture that arrives afterward. Plain runtime messages have no such dependency —
+ * if nothing is listening, the send simply fails and is ignored.
  */
 
 import { installPageCaptureHook, uninstallPageCaptureHook } from '../capture/hooks/main-world-hooks.js';
@@ -20,9 +27,6 @@ const DEFAULT_SESSION: EphemeralSession = {
   isCapturing: false,
 };
 
-// Connected Side Panel / Workbench UI ports
-const connectedPorts = new Set<chrome.runtime.Port>();
-
 async function getSession(): Promise<EphemeralSession> {
   try {
     const data = await chrome.storage.session.get('wiredata_active_session');
@@ -38,14 +42,15 @@ async function setSession(session: EphemeralSession): Promise<void> {
   } catch {}
 }
 
-async function broadcastToUI(message: any) {
-  for (const port of connectedPorts) {
-    try {
-      port.postMessage(message);
-    } catch {
-      connectedPorts.delete(port);
-    }
-  }
+/**
+ * Broadcasts to any listening extension surface (side panel, workbench tab).
+ * No-op safely if nothing is currently listening — the worker never depends
+ * on a durable connection to deliver this.
+ */
+function broadcastToUI(message: any): void {
+  try {
+    chrome.runtime.sendMessage(message).catch(() => {});
+  } catch {}
 }
 
 async function stopCaptureForTab(tabId: number): Promise<void> {
@@ -98,49 +103,66 @@ chrome.tabs.onRemoved.addListener(async tabId => {
 
 // 4. Tab navigation / origin change listener
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (!changeInfo.url && changeInfo.status !== 'complete') return;
-
   const session = await getSession();
-  if (session.activeTabId === tabId && session.isCapturing) {
-    if (tab.url) {
-      try {
-        const newOrigin = new URL(tab.url).origin;
-        if (session.activeOrigin && newOrigin !== session.activeOrigin) {
-          // Navigated to a different origin -> stop capture immediately
-          await stopCaptureForTab(tabId);
-        } else if (changeInfo.status === 'complete') {
-          // Same-origin reload/navigation -> reinject hook
-          try {
-            await chrome.scripting.executeScript({
-              target: { tabId },
-              world: 'MAIN',
-              func: installPageCaptureHook,
-              args: [session.activeSessionId || '', tabId],
-            });
-            await chrome.scripting.executeScript({
-              target: { tabId },
-              files: ['bridge.js'],
-            });
-          } catch {}
-        }
-      } catch {
+  if (session.activeTabId !== tabId || !session.isCapturing) return;
+
+  // Reinject as early as possible once the page has committed to a new
+  // document, rather than waiting for 'complete' — by 'complete' many SPAs
+  // have already fired their initial fetch/XHR calls and we'd miss them.
+  // injectImmediately races the page's own scripts; it cannot guarantee a
+  // pre-load hook, but it gets far closer than waiting for full load.
+  if (changeInfo.status === 'loading' && tab.url) {
+    try {
+      const newOrigin = new URL(tab.url).origin;
+      if (session.activeOrigin && newOrigin !== session.activeOrigin) {
         await stopCaptureForTab(tabId);
+        return;
       }
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: installPageCaptureHook,
+        args: [session.activeSessionId || '', tabId],
+        injectImmediately: true,
+      });
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['bridge.js'],
+        injectImmediately: true,
+      });
+    } catch {}
+    return;
+  }
+
+  if (changeInfo.status === 'complete' && tab.url) {
+    try {
+      const newOrigin = new URL(tab.url).origin;
+      if (session.activeOrigin && newOrigin !== session.activeOrigin) {
+        // Navigated to a different origin -> stop capture immediately
+        await stopCaptureForTab(tabId);
+      } else {
+        // Same-origin: reinject as a fallback in case the early 'loading'
+        // injection above didn't get a chance to run (e.g. worker was cold).
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            world: 'MAIN',
+            func: installPageCaptureHook,
+            args: [session.activeSessionId || '', tabId],
+          });
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['bridge.js'],
+          });
+        } catch {}
+      }
+    } catch {
+      await stopCaptureForTab(tabId);
     }
   }
 });
 
-// 5. Port connections from Side Panel or Workbench
-chrome.runtime.onConnect.addListener(port => {
-  if (port.name === 'wiredata_ui_channel') {
-    connectedPorts.add(port);
-    port.onDisconnect.addListener(() => {
-      connectedPorts.delete(port);
-    });
-  }
-});
-
-// 6. Runtime message handling
+// 5. Runtime message handling
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_SESSION_STATE') {
     getSession().then(sendResponse);
@@ -150,6 +172,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'START_TAB_CAPTURE') {
     const { tabId, origin, sessionId } = message;
     (async () => {
+      // Stop any previously active capture (possibly on a different tab)
+      // before starting a new one, so a stale hook/badge never survives
+      // a switch to a new capture target.
+      const existing = await getSession();
+      if (existing.isCapturing && existing.activeTabId !== null && existing.activeTabId !== tabId) {
+        await stopCaptureForTab(existing.activeTabId);
+      }
+
       // 1. Inject MAIN-world hook
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -211,4 +241,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     })();
   }
+
+  return undefined;
 });

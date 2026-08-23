@@ -148,3 +148,42 @@ export function redactJsonBody(body: unknown): unknown {
 
   return body;
 }
+
+/**
+ * Non-destructively scans a JSON value for keys that look credential-shaped
+ * and returns their JSON Pointers, without altering the value at all.
+ *
+ * Response bodies are the actual data WireData exists to capture and turn
+ * into datasets — mutating them the way redactJsonBody does for request
+ * bodies would break exact provenance (the stored body, its hash, and the
+ * derived dataset would all silently diverge from what the server actually
+ * returned), and the key-name heuristics here are prone to false positives
+ * on legitimate fields (e.g. "author", "passenger", "session_count"). This
+ * is a flag for the UI to surface a warning, not a mutation.
+ */
+export function detectSensitiveJsonPaths(body: unknown, basePath: string = ''): string[] {
+  const flagged: string[] = [];
+
+  if (body === null || body === undefined || typeof body !== 'object') {
+    return flagged;
+  }
+
+  if (Array.isArray(body)) {
+    body.forEach((item, idx) => {
+      flagged.push(...detectSensitiveJsonPaths(item, `${basePath}/${idx}`));
+    });
+    return flagged;
+  }
+
+  for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
+    const path = `${basePath}/${k}`;
+    if (isSensitiveKey(k)) {
+      flagged.push(path);
+    }
+    if (typeof v === 'object' && v !== null) {
+      flagged.push(...detectSensitiveJsonPaths(v, path));
+    }
+  }
+
+  return flagged;
+}

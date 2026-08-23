@@ -8,8 +8,8 @@ import {
   CapturedRequest,
   computeNormalizedRoute,
   detectCandidateCollections,
+  detectSensitiveJsonPaths,
   generateULID,
-  redactJsonBody,
   sha256,
   ULID,
 } from '@wiredata/core';
@@ -21,8 +21,8 @@ export type OnPageCaptureCallback = (
 ) => void;
 
 export class PageNetworkCaptureAdapter {
-  private port: chrome.runtime.Port | null = null;
   private isRunning = false;
+  private messageListener: ((msg: any) => void) | null = null;
 
   constructor(
     private sessionId: ULID,
@@ -31,35 +31,53 @@ export class PageNetworkCaptureAdapter {
     private onCapture: OnPageCaptureCallback
   ) {}
 
+  /**
+   * Throws if the service worker fails to actually install the capture hook
+   * (e.g. restricted page, expired activeTab grant, injection error). Callers
+   * must not report capture as active until this resolves successfully —
+   * the background service worker can be killed and restarted at any time,
+   * so delivery below is via plain runtime messages rather than a long-lived
+   * port, which would silently stop working across a worker restart.
+   */
   async start(): Promise<void> {
     if (this.isRunning) return;
-    this.isRunning = true;
 
-    // Connect UI port to background worker
-    this.port = chrome.runtime.connect({ name: 'wiredata_ui_channel' });
-    this.port.onMessage.addListener(async msg => {
-      if (msg.type === 'PAGE_CAPTURE_RECEIVED' && msg.capturePayload) {
-        await this.handlePayload(msg.capturePayload);
+    this.messageListener = (msg: any) => {
+      if (
+        msg?.type === 'PAGE_CAPTURE_RECEIVED' &&
+        msg.capturePayload &&
+        msg.capturePayload.sessionId === this.sessionId
+      ) {
+        this.handlePayload(msg.capturePayload);
       }
-    });
+    };
+    chrome.runtime.onMessage.addListener(this.messageListener);
 
-    // Send start signal to service worker
+    // Send start signal to service worker and require confirmation
     const origin = new URL(this.tabUrl).origin;
-    await chrome.runtime.sendMessage({
+    const response = await chrome.runtime.sendMessage({
       type: 'START_TAB_CAPTURE',
       tabId: this.tabId,
       origin,
       sessionId: this.sessionId,
     });
+
+    if (!response?.success) {
+      chrome.runtime.onMessage.removeListener(this.messageListener);
+      this.messageListener = null;
+      throw new Error(response?.error || 'Failed to start capture on this tab.');
+    }
+
+    this.isRunning = true;
   }
 
   async stop(): Promise<void> {
     if (!this.isRunning) return;
     this.isRunning = false;
 
-    if (this.port) {
-      this.port.disconnect();
-      this.port = null;
+    if (this.messageListener) {
+      chrome.runtime.onMessage.removeListener(this.messageListener);
+      this.messageListener = null;
     }
 
     await chrome.runtime.sendMessage({
@@ -69,10 +87,11 @@ export class PageNetworkCaptureAdapter {
   }
 
   private async handlePayload(p: any): Promise<void> {
-    // Redact sensitive keys before this ever touches persistence or hashing
-    const sanitizedBody = redactJsonBody(p.body);
-    const jsonStr = JSON.stringify(sanitizedBody);
+    // Response bodies are the actual data being captured — stored exactly as
+    // received. Only flag credential-shaped keys for the UI; never alter them.
+    const jsonStr = JSON.stringify(p.body);
     const hash = await sha256(jsonStr);
+    const sensitiveFields = detectSensitiveJsonPaths(p.body);
     const normalizedRoute = computeNormalizedRoute(p.method, p.url, p.graphqlOperationName);
 
     const capture: CapturedRequest = {
@@ -106,10 +125,11 @@ export class PageNetworkCaptureAdapter {
       classification: {
         json_candidate: true,
         parse_status: 'parsed',
+        sensitive_response_fields: sensitiveFields.length > 0 ? sensitiveFields : undefined,
       },
     };
 
-    const candidates = detectCandidateCollections(sanitizedBody);
-    this.onCapture(capture, sanitizedBody, candidates);
+    const candidates = detectCandidateCollections(p.body);
+    this.onCapture(capture, p.body, candidates);
   }
 }

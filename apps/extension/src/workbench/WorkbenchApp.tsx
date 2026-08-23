@@ -20,6 +20,7 @@ import {
   generateULID,
   groupCandidatesByRoute,
   GroupedRouteCandidate,
+  redactQueryParams,
   serializeToCsv,
   serializeToJsonl,
   ULID,
@@ -128,6 +129,48 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   // Adapter ref
   const adapterRef = useRef<ChromeNetworkCaptureAdapter | null>(null);
 
+  /**
+   * Loads the most recent persisted session (captures, body objects, dataset
+   * definitions) from a workspace folder into app state. Without this, the
+   * Side Panel and Workbench share a folder on disk but never share
+   * in-memory state — reopening the Workbench on an existing workspace
+   * always looked empty even though the data was sitting right there.
+   * Snapshots aren't loaded directly; setting captures + definitions lets
+   * the existing rebuild effect below recompute and register them in DuckDB.
+   * Returns true if anything was found and loaded.
+   */
+  const hydrateFromWorkspace = async (wm: WorkspaceManager): Promise<boolean> => {
+    const sessions = await wm.listSessions();
+    if (sessions.length === 0) return false;
+
+    const latestSession = sessions[0]; // listSessions() sorts newest-first
+    const loadedCaptures = await wm.listCaptures(latestSession.session_id);
+
+    const loadedCandidates: Array<{ capture: CapturedRequest; candidates: CandidateCollection[] }> = [];
+    for (const capture of loadedCaptures) {
+      if (!capture.response.body_hash) continue;
+      const body = await wm.getBodyObject(capture.response.body_hash);
+      if (body === null) continue;
+      responseBodiesRef.current.set(capture.response.body_hash, body);
+      const candidates = detectCandidateCollections(body);
+      if (candidates.length > 0) {
+        loadedCandidates.push({ capture, candidates });
+      }
+    }
+
+    const loadedDefinitions = await wm.listDatasetDefinitions();
+
+    setActiveSession(latestSession);
+    setCaptures(loadedCaptures);
+    setCandidatesList(loadedCandidates);
+    setDefinitions(loadedDefinitions);
+    if (loadedDefinitions.length > 0) {
+      setActiveDatasetId(loadedDefinitions[0].id);
+    }
+
+    return true;
+  };
+
   // Initialize workspace & session
   useEffect(() => {
     const initSession = async () => {
@@ -140,36 +183,41 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         } catch {}
       }
 
-      const session: CaptureSession = {
+      const freshSession: CaptureSession = {
         session_id: sessionId,
         name: 'Active Capture Session',
         started_at: new Date().toISOString(),
-        initial_page_url: pageUrl,
+        initial_page_url: pageUrl ? redactQueryParams(pageUrl).sanitizedUrl : pageUrl,
         navigation_history: [],
         capture_count: 0,
         body_bytes: 0,
         application_version: '0.1.0',
         status: 'new',
       };
-      setActiveSession(session);
 
       // Try restoring cached directory handle from IndexedDB
+      let hydrated = false;
       try {
         const cachedHandle = await DirectoryHandleManager.loadHandle();
         if (cachedHandle) {
-          const verified = await DirectoryHandleManager.verifyPermission(cachedHandle, 'read');
+          const verified = await DirectoryHandleManager.verifyPermission(cachedHandle, 'readwrite');
           if (verified) {
             const fsAdapter = new FSDirectoryAdapter(cachedHandle);
             const wm = new WorkspaceManager(fsAdapter);
             await wm.openOrCreateWorkspace();
             setWorkspaceManager(wm);
             setWorkspaceName((cachedHandle as any).name || 'Workspace Folder');
+            hydrated = await hydrateFromWorkspace(wm);
           }
         } else {
           await workspaceManager.openOrCreateWorkspace();
         }
       } catch {
         await workspaceManager.openOrCreateWorkspace();
+      }
+
+      if (!hydrated) {
+        setActiveSession(freshSession);
       }
 
       await duckdbClient.init();
@@ -187,6 +235,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       await wm.openOrCreateWorkspace();
       setWorkspaceManager(wm);
       setWorkspaceName((handle as any).name || 'Selected Folder');
+      await hydrateFromWorkspace(wm);
     } catch (err: any) {
       console.warn('Workspace selection cancelled or not supported:', err.message);
     }
@@ -337,7 +386,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
               flatten_delimiter: '__',
             },
             identity_columns: ['id'],
-            deduplication: 'keep_latest',
+            deduplication: 'keep_all',
             columns: {},
           };
           setDefinitions(prev => (prev.some(d => d.id === dsId) ? prev : [...prev, def]));
@@ -372,7 +421,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         flatten_delimiter: '__',
       },
       identity_columns: candidate.sample_keys.includes('id') ? ['id'] : [],
-      deduplication: 'keep_latest',
+      deduplication: 'keep_all',
       columns: {},
     };
 
@@ -862,6 +911,21 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                           {c.response.status}
                         </span>
                         <span style={{ color: colors.textDim }}>{c.response.body_size} B</span>
+                        {c.classification.sensitive_response_fields && c.classification.sensitive_response_fields.length > 0 && (
+                          <span
+                            title={`Credential-shaped field name(s) detected, stored exactly as received: ${c.classification.sensitive_response_fields.join(', ')}`}
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: colors.warning,
+                              background: `${colors.warning}22`,
+                              padding: '2px 6px',
+                              borderRadius: 4,
+                            }}
+                          >
+                            ⚠ {c.classification.sensitive_response_fields.length} sensitive-looking field{c.classification.sensitive_response_fields.length > 1 ? 's' : ''}
+                          </span>
+                        )}
                         {c.response.body_hash && (
                           <button
                             onClick={() => handleShowRaw(c.response.body_hash, '/')}
@@ -1084,7 +1148,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                                           flatten_delimiter: '__',
                                         },
                                         identity_columns: cand.sample_keys.includes('id') ? ['id'] : [],
-                                        deduplication: 'keep_latest',
+                                        deduplication: 'keep_all',
                                         columns: {},
                                       };
                                       setDefinitions(prev => [...prev.filter(d => d.id !== dsId), def]);
