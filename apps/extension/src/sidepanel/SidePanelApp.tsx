@@ -20,12 +20,17 @@ import {
 } from '@wiredata/workspace';
 import { colors, fonts } from '@wiredata/ui';
 import { PageNetworkCaptureAdapter } from '../adapters/page.js';
+import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
 export function SidePanelApp() {
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [isScraping, setIsScraping] = useState<boolean>(false);
+  const [scrapeStatus, setScrapeStatus] = useState<{ message: string; tone: 'success' | 'warning' | 'error' } | null>(
+    null
+  );
 
   // Metrics
   const [captureCount, setCaptureCount] = useState<number>(0);
@@ -261,6 +266,80 @@ export function SidePanelApp() {
     }
   };
 
+  // One-shot scrape of whatever table/grid is on the page right now.
+  // Independent of Start/Stop Capture (network capture) — a user may want
+  // one without the other. Reuses the active capture session if one is
+  // already running, so both capture modes land in the same session; if
+  // there's no active session yet, this creates a lightweight one so the
+  // scrape still lands in the workspace and shows up when the Workbench
+  // hydrates it.
+  const handleScrapeTable = async () => {
+    setScrapeStatus(null);
+
+    if (!hasPersistentWorkspace) {
+      setScrapeStatus({ message: 'Choose a workspace folder before scraping.', tone: 'error' });
+      return;
+    }
+    if (!activeTab?.id) {
+      setScrapeStatus({ message: 'Please open an active web page tab first.', tone: 'error' });
+      return;
+    }
+
+    setIsScraping(true);
+    try {
+      let session = activeSession;
+      if (!session) {
+        session = {
+          session_id: generateULID(),
+          name: `Table Scrape: ${hostName}`,
+          started_at: new Date().toISOString(),
+          initial_page_url: activeTab.url ? redactQueryParams(activeTab.url).sanitizedUrl : '',
+          navigation_history: [],
+          capture_count: 0,
+          body_bytes: 0,
+          application_version: '0.1.0',
+          status: 'new',
+        };
+        setActiveSession(session);
+        await workspaceManager.saveSession(session);
+      }
+
+      const outcome = await captureTableFromActiveTab(session.session_id, activeTab.id);
+      if (!outcome) {
+        setScrapeStatus({ message: 'No table or grid found on this page.', tone: 'error' });
+        return;
+      }
+
+      setCaptureCount(prev => prev + 1);
+      setTotalBytes(prev => prev + (outcome.capture.response.body_size || 0));
+      for (const cand of outcome.candidates) {
+        setDetectedCollections(prev => {
+          const next = new Map(prev);
+          const cur = next.get(cand.suggested_name) || 0;
+          next.set(cand.suggested_name, cur + cand.row_count);
+          return next;
+        });
+      }
+      await workspaceManager.saveCapture(session.session_id, outcome.capture, outcome.body);
+
+      if (outcome.incomplete) {
+        setScrapeStatus({
+          message: `Captured ${outcome.rowCount} of ~${outcome.expectedRowCount} rows. This grid didn't respond to scrolling, so the scrape is likely partial — scroll through it manually first, then scrape again.`,
+          tone: 'warning',
+        });
+      } else {
+        setScrapeStatus({
+          message: `Captured ${outcome.rowCount} rows (${outcome.strategy === 'table' ? 'plain table' : 'virtualized grid'}).`,
+          tone: 'success',
+        });
+      }
+    } catch (err: any) {
+      setScrapeStatus({ message: err?.message || 'Failed to scrape this page.', tone: 'error' });
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
   // Open Full Workbench in a browser tab
   const handleOpenWorkbench = () => {
     if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
@@ -427,6 +506,72 @@ export function SidePanelApp() {
             {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
           </button>
         )}
+      </div>
+
+      {/* Scrape Visible Table / Grid — one-shot, independent of Start/Stop Capture */}
+      <div
+        style={{
+          background: colors.panelBg,
+          border: `1px solid ${colors.borderLight}`,
+          borderRadius: 10,
+          padding: 16,
+          marginBottom: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape Table on Page</div>
+        <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
+          Grabs whatever HTML table or grid is visible on this page right now — a one-time snapshot, not a live
+          recording. Rows are captured exactly as displayed; large virtualized grids that don't respond to
+          programmatic scrolling may only capture what's currently rendered.
+        </p>
+
+        {scrapeStatus && (
+          <div
+            style={{
+              fontSize: 12,
+              color:
+                scrapeStatus.tone === 'error'
+                  ? colors.error
+                  : scrapeStatus.tone === 'warning'
+                    ? colors.warning
+                    : colors.success,
+              background:
+                scrapeStatus.tone === 'error'
+                  ? `${colors.error}11`
+                  : scrapeStatus.tone === 'warning'
+                    ? `${colors.warning}11`
+                    : `${colors.success}11`,
+              border: `1px solid ${
+                scrapeStatus.tone === 'error' ? colors.error : scrapeStatus.tone === 'warning' ? colors.warning : colors.success
+              }44`,
+              borderRadius: 6,
+              padding: '8px 10px',
+            }}
+          >
+            {scrapeStatus.message}
+          </div>
+        )}
+
+        <button
+          onClick={handleScrapeTable}
+          disabled={isScraping || !hasPersistentWorkspace}
+          style={{
+            background: hasPersistentWorkspace ? colors.cardBg : colors.panelBg,
+            color: hasPersistentWorkspace ? colors.text : colors.textDim,
+            border: `1px solid ${colors.borderLight}`,
+            borderRadius: 6,
+            padding: '10px 16px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: hasPersistentWorkspace && !isScraping ? 'pointer' : 'not-allowed',
+            opacity: isScraping ? 0.7 : 1,
+          }}
+        >
+          {isScraping ? 'Scraping…' : '🔲 Scrape Table'}
+        </button>
       </div>
 
       {/* Detected Datasets Section */}

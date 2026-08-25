@@ -1,0 +1,111 @@
+/**
+ * DOM Table / Grid Capture Adapter
+ * One-shot (not continuous, unlike network capture): injects extractDomTable
+ * into the active tab, converts the result into the same CapturedRequest /
+ * candidate shape the network adapters produce, and hands it back for the
+ * normal save/dataset/DuckDB pipeline to pick up unchanged.
+ */
+
+import {
+  CandidateCollection,
+  CapturedRequest,
+  coerceScrapedCellValue,
+  computeNormalizedRoute,
+  detectCandidateCollections,
+  generateULID,
+  sha256,
+  ULID,
+} from '@wiredata/core';
+import { extractDomTable, DomExtractionResult } from '../capture/hooks/dom-table-hook.js';
+
+export interface DomCaptureOutcome {
+  capture: CapturedRequest;
+  body: { rows: Record<string, string | number>[] };
+  candidates: CandidateCollection[];
+  strategy: DomExtractionResult['strategy'];
+  rowCount: number;
+  incomplete: boolean;
+  expectedRowCount?: number;
+}
+
+/**
+ * Scrapes whatever table/grid is on the given tab right now and converts it
+ * into a capture. Returns null if no table/grid was found on the page.
+ *
+ * Unlike network capture, this has no "immutable server response" to be
+ * exact about — capture_mode: 'dom' says so explicitly, and the caller
+ * should surface `incomplete`/`expectedRowCount` rather than let a partial
+ * virtualized-grid scrape masquerade as a complete one.
+ */
+export async function captureTableFromActiveTab(
+  sessionId: ULID,
+  tabId: number,
+  rootSelector?: string
+): Promise<DomCaptureOutcome | null> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: extractDomTable,
+    args: [rootSelector],
+  });
+
+  const result = results?.[0]?.result as DomExtractionResult | null | undefined;
+  if (!result || result.rows.length === 0) return null;
+
+  // Every scraped cell arrives as text; coerceScrapedCellValue converts the
+  // high-confidence numeric ones to real numbers so the existing (unmodified)
+  // typing engine infers BIGINT/DOUBLE instead of VARCHAR for them. This is
+  // deliberately scoped to this DOM-only adapter — the same coercion applied
+  // to a real JSON API capture would be wrong (a string there is often
+  // meant to stay one: zip codes, IDs with leading zeros, etc.).
+  const rowObjects = result.rows.map(cells =>
+    Object.fromEntries(
+      result.headers.map((h, i) => [h || `column_${i + 1}`, coerceScrapedCellValue(cells[i] ?? '')])
+    )
+  );
+  const body = { rows: rowObjects };
+  const bodyStr = JSON.stringify(body);
+  const bodyHash = await sha256(bodyStr);
+  const normalizedRoute = computeNormalizedRoute('GET', result.sourceUrl);
+
+  const capture: CapturedRequest = {
+    capture_id: generateULID(),
+    session_id: sessionId,
+    capture_mode: 'dom',
+    request: {
+      url: result.sourceUrl,
+      sanitized_url: result.sourceUrl,
+      route_template: normalizedRoute,
+      method: 'GET',
+      query_parameters: [],
+    },
+    response: {
+      status: 200,
+      status_text: 'OK',
+      mime_type: 'application/json',
+      body_size: bodyStr.length,
+      body_hash: bodyHash,
+      body_object_ref: bodyHash,
+    },
+    timing: {
+      started_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      duration_ms: 0,
+    },
+    classification: {
+      json_candidate: true,
+      parse_status: 'parsed',
+    },
+  };
+
+  const candidates = detectCandidateCollections(body);
+
+  return {
+    capture,
+    body,
+    candidates,
+    strategy: result.strategy,
+    rowCount: result.rows.length,
+    incomplete: result.incomplete,
+    expectedRowCount: result.expectedRowCount,
+  };
+}

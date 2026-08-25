@@ -11,6 +11,7 @@ export * from './inference/route.js';
 export * from './inference/candidate.js';
 export * from './inference/grouping.js';
 export * from './inference/typing.js';
+export * from './inference/dom-value-coercion.js';
 export * from './datasets/flatten.js';
 export * from './datasets/dedup.js';
 export * from './datasets/builder.js';

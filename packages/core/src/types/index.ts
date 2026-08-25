@@ -42,7 +42,14 @@ export interface SanitizedHeader {
   is_redacted: boolean;
 }
 
-export type CaptureMode = 'page' | 'devtools';
+/**
+ * 'dom' captures have no server response to be exact about — the "immutable
+ * capture" is a snapshot of extracted table/grid cell text at scrape time,
+ * hashed and never mutated afterward, but it is fundamentally a DOM
+ * observation, not response bytes. Label it distinctly in the UI rather
+ * than implying the same provenance guarantee as 'page'/'devtools'.
+ */
+export type CaptureMode = 'page' | 'devtools' | 'dom';
 
 export interface SanitizedQueryParam {
   name: string;
