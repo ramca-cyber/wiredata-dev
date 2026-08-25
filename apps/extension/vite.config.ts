@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
-import { copyFileSync, existsSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, createReadStream } from 'fs';
 
 function copyManifestPlugin() {
   return {
@@ -17,8 +17,44 @@ function copyManifestPlugin() {
   };
 }
 
+/**
+ * Serves (dev) / copies (build) the DuckDB-WASM MVP bundle straight from
+ * node_modules, under /duckdb/*. Self-hosting is required, not optional:
+ * fetching these from jsDelivr never actually initializes (confirmed — it
+ * throws "duckdb is not initialized" even with zero CSP in play), and even
+ * if it did, a cross-origin worker script violates the packaged extension's
+ * CSP (script-src 'self') and the project's own zero-cloud-backend
+ * invariant. The MVP variant needs no COOP/COEP headers, unlike eh/coi.
+ *
+ * The 39MB wasm binary is never committed to the repo — it's copied from
+ * node_modules at build time and served from there in dev.
+ */
+function duckdbAssetsPlugin() {
+  const ASSETS = ['duckdb-mvp.wasm', 'duckdb-browser-mvp.worker.js'];
+  const sourceDir = resolve(__dirname, '../../node_modules/@duckdb/duckdb-wasm/dist');
+
+  return {
+    name: 'duckdb-assets',
+    configureServer(server: any) {
+      server.middlewares.use((req: any, res: any, next: any) => {
+        const match = ASSETS.find(a => req.url === `/duckdb/${a}`);
+        if (!match) return next();
+        res.setHeader('Content-Type', match.endsWith('.wasm') ? 'application/wasm' : 'application/javascript');
+        createReadStream(resolve(sourceDir, match)).pipe(res);
+      });
+    },
+    closeBundle() {
+      const outDir = resolve(__dirname, 'dist/duckdb');
+      mkdirSync(outDir, { recursive: true });
+      for (const asset of ASSETS) {
+        copyFileSync(resolve(sourceDir, asset), resolve(outDir, asset));
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), copyManifestPlugin()],
+  plugins: [react(), copyManifestPlugin(), duckdbAssetsPlugin()],
   build: {
     outDir: 'dist',
     rollupOptions: {

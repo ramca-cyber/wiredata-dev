@@ -6,6 +6,7 @@
 import {
   CapturedRequest,
   ColumnDefinition,
+  ColumnParseRule,
   CoverageSummary,
   DatasetDefinition,
   DatasetSnapshot,
@@ -73,6 +74,11 @@ export function buildDatasetSnapshot(options: BuildDatasetOptions): BuildDataset
 
   let reportedTotalCount: number | undefined;
 
+  const parseRules: Record<string, ColumnParseRule> = {};
+  for (const [colName, colDef] of Object.entries(definition.columns)) {
+    if (colDef.parse_rule) parseRules[colName] = colDef.parse_rule;
+  }
+
   for (const capture of captures) {
     if (!matchesSourceRule(capture, definition)) {
       continue;
@@ -113,6 +119,7 @@ export function buildDatasetSnapshot(options: BuildDatasetOptions): BuildDataset
       const { values, field_lineage } = flattenRecord(item, itemPointer, {
         delimiter: definition.extraction.flatten_delimiter,
         nestedObjectPolicy: definition.extraction.nested_object_policy,
+        parseRules,
       });
 
       rawExtractedRows.push({

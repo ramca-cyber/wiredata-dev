@@ -9,7 +9,6 @@
 import {
   CandidateCollection,
   CapturedRequest,
-  coerceScrapedCellValue,
   computeNormalizedRoute,
   detectCandidateCollections,
   generateULID,
@@ -20,7 +19,7 @@ import { extractDomTable, DomExtractionResult } from '../capture/hooks/dom-table
 
 export interface DomCaptureOutcome {
   capture: CapturedRequest;
-  body: { rows: Record<string, string | number>[] };
+  body: { rows: Record<string, string>[] };
   candidates: CandidateCollection[];
   strategy: DomExtractionResult['strategy'];
   rowCount: number;
@@ -51,16 +50,14 @@ export async function captureTableFromActiveTab(
   const result = results?.[0]?.result as DomExtractionResult | null | undefined;
   if (!result || result.rows.length === 0) return null;
 
-  // Every scraped cell arrives as text; coerceScrapedCellValue converts the
-  // high-confidence numeric ones to real numbers so the existing (unmodified)
-  // typing engine infers BIGINT/DOUBLE instead of VARCHAR for them. This is
-  // deliberately scoped to this DOM-only adapter — the same coercion applied
-  // to a real JSON API capture would be wrong (a string there is often
-  // meant to stay one: zip codes, IDs with leading zeros, etc.).
+  // Every scraped cell is stored exactly as extracted — text, untouched.
+  // The immutable capture is this raw snapshot; whether "1,425,423,212"
+  // should become a number is a per-column decision made later (confirmed
+  // via a suggested ColumnParseRule, applied at dataset-build time), not
+  // something baked into the capture before anyone's had a chance to see or
+  // correct it.
   const rowObjects = result.rows.map(cells =>
-    Object.fromEntries(
-      result.headers.map((h, i) => [h || `column_${i + 1}`, coerceScrapedCellValue(cells[i] ?? '')])
-    )
+    Object.fromEntries(result.headers.map((h, i) => [h || `column_${i + 1}`, cells[i] ?? '']))
   );
   const body = { rows: rowObjects };
   const bodyStr = JSON.stringify(body);

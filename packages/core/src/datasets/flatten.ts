@@ -2,8 +2,9 @@
  * Provenance-Preserving Object Flattening Engine
  */
 
-import { FieldLineage, JSONPointer, NestedObjectPolicy } from '../types/index.js';
+import { ColumnParseRule, FieldLineage, JSONPointer, NestedObjectPolicy } from '../types/index.js';
 import { compilePointer, joinPointers } from '../json/pointer.js';
+import { applyParseRule } from '../inference/parse-rules.js';
 
 export interface FlattenResult {
   values: Record<string, unknown>;
@@ -13,6 +14,14 @@ export interface FlattenResult {
 export interface FlattenOptions {
   delimiter?: string; // default "__"
   nestedObjectPolicy?: NestedObjectPolicy; // 'flatten' | 'json'
+  /**
+   * Confirmed per-column parse rules (see ColumnParseRule) keyed by the
+   * final flattened column name. Applied only to string values — a rule
+   * only ever makes sense against raw scraped text, never a value that's
+   * already natively typed. raw_value in field_lineage always keeps the
+   * untouched original regardless of what this produces.
+   */
+  parseRules?: Record<string, ColumnParseRule>;
 }
 
 /**
@@ -71,6 +80,12 @@ export function flattenRecord(
         if (typeof value === 'object' && value !== null) {
           transformedVal = JSON.stringify(value);
           operations.push('json_serialize');
+        }
+
+        const parseRule = options.parseRules?.[colName];
+        if (parseRule && typeof transformedVal === 'string') {
+          transformedVal = applyParseRule(transformedVal, parseRule);
+          operations.push(`parse_rule:${parseRule.kind}`);
         }
 
         values[colName] = transformedVal;

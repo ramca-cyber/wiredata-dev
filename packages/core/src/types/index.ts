@@ -123,6 +123,30 @@ export interface DatasetCandidate {
   collections: CandidateCollection[];
 }
 
+/**
+ * A confirmed, explicit instruction for how to parse a column's raw scraped
+ * text into a typed value — e.g. from a DOM capture, where every cell is
+ * text regardless of what it represents. This is deliberately never
+ * inferred and silently applied: it's proposed as a suggestion (see
+ * @wiredata/duckdb's suggestParseRules, which tests candidates against real
+ * DuckDB TRY_CAST/TRY_STRPTIME rather than hand-rolled regex) and only takes
+ * effect once a user confirms it, at which point it's persisted here so it
+ * reapplies automatically on every future rebuild of this dataset.
+ */
+export interface ColumnParseRule {
+  kind: 'number' | 'percent' | 'date';
+  /** 'number' only. Stripped before parsing if present, e.g. '$', '€', '£'. */
+  currency_symbol?: string;
+  /** 'number' only. Default ','. Pass '' if the value has no grouping. */
+  thousands_separator?: ',' | '.' | ' ' | '';
+  /** 'number' only. Default '.'. */
+  decimal_separator?: ',' | '.';
+  /** 'percent' only. Does "88%" mean 88 or 0.88? Default false (88). */
+  percent_as_fraction?: boolean;
+  /** 'date' only. One of 'YYYY-MM-DD' | 'MM/DD/YYYY' | 'DD/MM/YYYY' | 'MM-DD-YYYY' | 'DD-MM-YYYY'. */
+  date_format?: string;
+}
+
 export interface ColumnDefinition {
   name: string;
   original_name?: string;
@@ -131,6 +155,7 @@ export interface ColumnDefinition {
   json_pointer?: JSONPointer;
   inferred_type: LogicalType;
   type_override?: LogicalType;
+  parse_rule?: ColumnParseRule;
   is_visible: boolean;
   order: number;
 }

@@ -31,7 +31,7 @@ import {
   InMemoryFileAdapter,
   WorkspaceManager,
 } from '@wiredata/workspace';
-import { DuckDBClient } from '@wiredata/duckdb';
+import { DuckDBClient, ParseRuleSuggestion } from '@wiredata/duckdb';
 import {
   colors,
   DatasetHeader,
@@ -101,6 +101,10 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   );
   const [workspaceName, setWorkspaceName] = useState<string>('In-Memory Working Session');
   const [duckdbClient] = useState<DuckDBClient>(() => new DuckDBClient());
+  const [duckdbStatus, setDuckdbStatus] = useState<{ ready: boolean; error: string | null }>({
+    ready: false,
+    error: null,
+  });
 
   // In-flight captured data
   const [captures, setCaptures] = useState<CapturedRequest[]>([]);
@@ -120,6 +124,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const [selectedRow, setSelectedRow] = useState<ExtractedRow | null>(null);
   const [rawViewerData, setRawViewerData] = useState<{ body: unknown; pointer: string } | null>(null);
   const [exportModalContent, setExportModalContent] = useState<{ title: string; text: string } | null>(null);
+  const [parseSuggestions, setParseSuggestions] = useState<ParseRuleSuggestion[] | null>(null);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
 
   // SQL Runner state
   const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM orders LIMIT 20;');
@@ -221,6 +228,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       }
 
       await duckdbClient.init();
+      setDuckdbStatus({ ready: duckdbClient.isEngineReady, error: duckdbClient.engineError });
     };
 
     initSession();
@@ -458,6 +466,74 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     workspaceManager.saveDatasetDefinition(def);
     workspaceManager.saveDatasetSnapshot(snapshot, rows);
     duckdbClient.registerDataset(def.name, snapshot.schema, rows).catch(console.error);
+  };
+
+  // Ask DuckDB to test candidate parse rules against a dataset's raw scraped
+  // text (see DuckDBClient.suggestParseRules) — read-only, nothing is
+  // applied until the user confirms a specific suggestion below.
+  const handleSuggestCleanup = async (def: DatasetDefinition, snapshot: DatasetSnapshot, rows: ExtractedRow[]) => {
+    setSuggestError(null);
+    setSuggestLoading(true);
+    try {
+      const columnValues: Record<string, string[]> = {};
+      for (const colName of Object.keys(snapshot.schema)) {
+        columnValues[colName] = rows.map(r => {
+          const raw = r.field_lineage[colName]?.raw_value;
+          return typeof raw === 'string' ? raw : '';
+        });
+      }
+      const suggestions = await duckdbClient.suggestParseRules(columnValues);
+      setParseSuggestions(suggestions);
+    } catch (err: any) {
+      setSuggestError(err?.message || 'Failed to get suggestions.');
+    } finally {
+      setSuggestLoading(false);
+    }
+  };
+
+  // Persists a confirmed suggestion as a ColumnParseRule on the dataset
+  // definition (so it reapplies on every future rebuild) and rebuilds now.
+  const handleApplySuggestion = (def: DatasetDefinition, suggestion: ParseRuleSuggestion) => {
+    const existingCol = def.columns[suggestion.column] ?? {
+      name: suggestion.column,
+      original_name: suggestion.column,
+      logical_type: 'VARCHAR' as const,
+      inferred_type: 'VARCHAR' as const,
+      is_visible: true,
+      order: Object.keys(def.columns).length,
+    };
+    const provisionalDef: DatasetDefinition = {
+      ...def,
+      columns: {
+        ...def.columns,
+        [suggestion.column]: { ...existingCol, parse_rule: suggestion.rule },
+      },
+    };
+
+    // buildDatasetSnapshot always prefers an existing column's logical_type
+    // over a fresh inference (correct — a persisted decision shouldn't
+    // flip-flop just because new data came in), but that means the
+    // placeholder above would otherwise freeze this column at whatever type
+    // it had *before* the rule ran. Rebuild once locally to learn the real
+    // post-rule type, then persist that as the actual decision.
+    const { snapshot: provisional } = buildDatasetSnapshot({
+      definition: provisionalDef,
+      captures,
+      responseBodies: responseBodiesRef.current,
+    });
+    const freshType = provisional.schema[suggestion.column]?.inferred_type ?? 'VARCHAR';
+
+    const updatedDef: DatasetDefinition = {
+      ...provisionalDef,
+      updated_at: new Date().toISOString(),
+      columns: {
+        ...provisionalDef.columns,
+        [suggestion.column]: { ...provisionalDef.columns[suggestion.column], logical_type: freshType, inferred_type: freshType },
+      },
+    };
+    setDefinitions(prev => prev.map(d => (d.id === def.id ? updatedDef : d)));
+    rebuildDataset(updatedDef);
+    setParseSuggestions(prev => (prev ? prev.filter(s => s.column !== suggestion.column) : prev));
   };
 
   // Data clearing handlers
@@ -1230,6 +1306,48 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                 }}
               />
 
+              {activeSnapshotData.rows[0]?.lineage.capture_mode === 'dom' && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    padding: '8px 20px',
+                    background: `${colors.primary}11`,
+                    borderBottom: `1px solid ${colors.border}`,
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ color: colors.textMuted }}>
+                    Scraped from a page — every cell is text. DuckDB can test whether any columns look like numbers, percentages, or dates.
+                  </span>
+                  <button
+                    onClick={() => handleSuggestCleanup(activeDataset, activeSnapshotData.snapshot, activeSnapshotData.rows)}
+                    disabled={suggestLoading}
+                    style={{
+                      background: colors.cardBg,
+                      color: colors.primaryLight,
+                      border: `1px solid ${colors.primary}66`,
+                      borderRadius: 6,
+                      padding: '5px 12px',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: suggestLoading ? 'default' : 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {suggestLoading ? 'Checking columns…' : '✨ Suggest Cleanup'}
+                  </button>
+                </div>
+              )}
+
+              {suggestError && (
+                <div style={{ padding: '8px 20px', fontSize: 12, color: colors.error, background: `${colors.error}11` }}>
+                  {suggestError}
+                </div>
+              )}
+
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <VirtualizedTable
                   rows={activeSnapshotData.rows}
@@ -1244,7 +1362,22 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
           {activeView === 'sql' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <h2 style={{ margin: 0, fontSize: 18, color: colors.text }}>⚡ Embedded DuckDB SQL Engine</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <h2 style={{ margin: 0, fontSize: 18, color: colors.text }}>⚡ DuckDB SQL Engine</h2>
+                  <span
+                    title={duckdbStatus.error || undefined}
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: 4,
+                      background: duckdbStatus.ready ? `${colors.success}22` : `${colors.error}22`,
+                      color: duckdbStatus.ready ? colors.success : colors.error,
+                    }}
+                  >
+                    {duckdbStatus.ready ? 'ACTIVE' : 'UNAVAILABLE'}
+                  </span>
+                </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     onClick={handleRunQuery}
@@ -1471,6 +1604,151 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                 outline: 'none',
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Suggested Cleanup Modal */}
+      {parseSuggestions && activeDataset && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000,
+          }}
+          onClick={() => setParseSuggestions(null)}
+        >
+          <div
+            style={{
+              width: '70vw',
+              maxWidth: 800,
+              maxHeight: '80vh',
+              background: colors.panelBg,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 8,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: '12px 16px',
+                borderBottom: `1px solid ${colors.border}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span style={{ fontWeight: 600, color: colors.text }}>Suggested Cleanup</span>
+              <button
+                onClick={() => setParseSuggestions(null)}
+                style={{ background: 'transparent', border: 'none', color: colors.textDim, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {parseSuggestions.length === 0 ? (
+                <div style={{ color: colors.textDim, fontSize: 13, textAlign: 'center', padding: 24 }}>
+                  No column looked confidently like a number, percent, or date. Everything stays text.
+                </div>
+              ) : (
+                parseSuggestions.map(s => (
+                  <div
+                    key={s.column}
+                    style={{
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: 8,
+                      padding: 14,
+                      background: colors.cardBg,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <div>
+                        <span style={{ fontWeight: 700, color: colors.text, fontFamily: fonts.mono }}>{s.column}</span>
+                        <span style={{ marginLeft: 10, fontSize: 12, color: colors.primaryLight }}>{s.label}</span>
+                        <span style={{ marginLeft: 8, fontSize: 11, color: colors.textDim }}>
+                          {Math.round(s.confidence * 100)}% of values match
+                        </span>
+                      </div>
+                      {!s.alternatives && (
+                        <button
+                          onClick={() => handleApplySuggestion(activeDataset, s)}
+                          style={{
+                            background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 6,
+                            padding: '6px 14px',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Apply
+                        </button>
+                      )}
+                    </div>
+
+                    {s.alternatives ? (
+                      <>
+                        <div style={{ fontSize: 12, color: colors.warning, marginBottom: 8 }}>
+                          ⚠ Ambiguous — every value fits more than one date format, and they disagree. Pick one:
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {s.alternatives.map(alt => (
+                            <div
+                              key={alt.label}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                background: colors.panelBg,
+                                borderRadius: 6,
+                                padding: '8px 10px',
+                              }}
+                            >
+                              <div style={{ fontSize: 12, fontFamily: fonts.mono, color: colors.textMuted }}>
+                                {alt.label}: {alt.sampleBefore[0]} → {String(alt.sampleAfter[0])}
+                              </div>
+                              <button
+                                onClick={() => handleApplySuggestion(activeDataset, alt)}
+                                style={{
+                                  background: colors.cardBg,
+                                  color: colors.primaryLight,
+                                  border: `1px solid ${colors.primary}66`,
+                                  borderRadius: 6,
+                                  padding: '4px 10px',
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Use this
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 12, fontFamily: fonts.mono, color: colors.textMuted, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {s.sampleBefore.slice(0, 3).map((before, i) => (
+                          <div key={i}>
+                            {before} → <span style={{ color: colors.success }}>{String(s.sampleAfter[i])}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
