@@ -93,6 +93,11 @@ const DATE_HYPOTHESES: ParseHypothesis[] = [
 const ALL_HYPOTHESES = [...NUMBER_HYPOTHESES, PERCENT_HYPOTHESIS, ...DATE_HYPOTHESES];
 const CONFIDENCE_THRESHOLD = 0.9;
 
+// apache-arrow's Type enum values for Date32/Date64 and Timestamp — checked
+// directly against a live query rather than assumed (Date=8, Timestamp=10).
+const ARROW_TYPE_ID_DATE = 8;
+const ARROW_TYPE_ID_TIMESTAMP = 10;
+
 function mapLogicalTypeToDuckDB(type: LogicalType): string {
   switch (type) {
     case 'BOOLEAN':
@@ -119,6 +124,24 @@ export class DuckDBClient {
   private db: duckdb.AsyncDuckDB | null = null;
   private conn: duckdb.AsyncDuckDBConnection | null = null;
   private initError: string | null = null;
+  // AsyncDuckDBConnection isn't safe for concurrent overlapping queries —
+  // confirmed live: WorkbenchApp's dataset-registration effect re-runs once
+  // per incoming capture and fires registerDataset() without awaiting the
+  // previous call, and overlapping DROP/CREATE TABLE calls against the same
+  // connection corrupted the WASM runtime's exception-handling state
+  // ("ReferenceError: _setThrew is not defined"). Every method that touches
+  // this.conn/this.db is routed through this queue so calls always run one
+  // at a time, regardless of whether the caller awaits between them.
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.queue.then(fn, fn);
+    this.queue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
 
   /** True once DuckDB-WASM has actually initialized and can run real SQL. */
   get isEngineReady(): boolean {
@@ -192,53 +215,55 @@ export class DuckDBClient {
     schema: Record<string, ColumnDefinition>,
     rows: ExtractedRow[]
   ): Promise<void> {
-    if (!this.conn || !this.db) {
-      throw new Error('DuckDB engine is not available — cannot register dataset.');
-    }
-
-    const safeName = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
-    const visibleCols = Object.entries(schema).filter(([, def]) => def.is_visible);
-
-    const plainRows = rows.map(r => {
-      const obj: Record<string, any> = {};
-      for (const [colName] of visibleCols) {
-        const val = r.values[colName] ?? null;
-        // Nested object/array values (nested_array_policy: 'json') must be
-        // stringified before serialization, so the JSON file always carries
-        // a plain string for these columns and TRY_CAST(... AS VARCHAR)
-        // never has to convert a DuckDB STRUCT/LIST itself.
-        obj[colName] = typeof val === 'object' && val !== null ? JSON.stringify(val) : val;
+    return this.enqueue(async () => {
+      if (!this.conn || !this.db) {
+        throw new Error('DuckDB engine is not available — cannot register dataset.');
       }
-      return obj;
+
+      const safeName = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
+      const visibleCols = Object.entries(schema).filter(([, def]) => def.is_visible);
+
+      const plainRows = rows.map(r => {
+        const obj: Record<string, any> = {};
+        for (const [colName] of visibleCols) {
+          const val = r.values[colName] ?? null;
+          // Nested object/array values (nested_array_policy: 'json') must be
+          // stringified before serialization, so the JSON file always carries
+          // a plain string for these columns and TRY_CAST(... AS VARCHAR)
+          // never has to convert a DuckDB STRUCT/LIST itself.
+          obj[colName] = typeof val === 'object' && val !== null ? JSON.stringify(val) : val;
+        }
+        return obj;
+      });
+
+      const provRows = rows.map(r => ({
+        ...r.values,
+        __ndw_row_id: r.row_id,
+        __ndw_capture_id: r.lineage.capture_id,
+        __ndw_record_pointer: r.lineage.record_pointer,
+        __ndw_captured_at: r.lineage.captured_at,
+        __ndw_request_url: r.lineage.request_url,
+      }));
+
+      await this.db.registerFileText(`_${safeName}.json`, JSON.stringify(plainRows));
+      await this.db.registerFileText(`_${safeName}__provenance.json`, JSON.stringify(provRows));
+
+      const castColumns = visibleCols
+        .map(([colName, def]) => `TRY_CAST("${colName}" AS ${mapLogicalTypeToDuckDB(def.logical_type)}) AS "${colName}"`)
+        .join(', ');
+
+      await this.conn.query(`DROP TABLE IF EXISTS "${safeName}"`);
+      await this.conn.query(
+        castColumns
+          ? `CREATE TABLE "${safeName}" AS SELECT ${castColumns} FROM read_json_auto('_${safeName}.json')`
+          : `CREATE TABLE "${safeName}" AS SELECT * FROM read_json_auto('_${safeName}.json')`
+      );
+
+      await this.conn.query(`DROP TABLE IF EXISTS "${safeName}__provenance"`);
+      await this.conn.query(
+        `CREATE TABLE "${safeName}__provenance" AS SELECT * FROM read_json_auto('_${safeName}__provenance.json')`
+      );
     });
-
-    const provRows = rows.map(r => ({
-      ...r.values,
-      __ndw_row_id: r.row_id,
-      __ndw_capture_id: r.lineage.capture_id,
-      __ndw_record_pointer: r.lineage.record_pointer,
-      __ndw_captured_at: r.lineage.captured_at,
-      __ndw_request_url: r.lineage.request_url,
-    }));
-
-    await this.db.registerFileText(`_${safeName}.json`, JSON.stringify(plainRows));
-    await this.db.registerFileText(`_${safeName}__provenance.json`, JSON.stringify(provRows));
-
-    const castColumns = visibleCols
-      .map(([colName, def]) => `TRY_CAST("${colName}" AS ${mapLogicalTypeToDuckDB(def.logical_type)}) AS "${colName}"`)
-      .join(', ');
-
-    await this.conn.query(`DROP TABLE IF EXISTS "${safeName}"`);
-    await this.conn.query(
-      castColumns
-        ? `CREATE TABLE "${safeName}" AS SELECT ${castColumns} FROM read_json_auto('_${safeName}.json')`
-        : `CREATE TABLE "${safeName}" AS SELECT * FROM read_json_auto('_${safeName}.json')`
-    );
-
-    await this.conn.query(`DROP TABLE IF EXISTS "${safeName}__provenance"`);
-    await this.conn.query(
-      `CREATE TABLE "${safeName}__provenance" AS SELECT * FROM read_json_auto('_${safeName}__provenance.json')`
-    );
   }
 
   /**
@@ -254,109 +279,142 @@ export class DuckDBClient {
    * deterministic function that actually runs once confirmed).
    */
   async suggestParseRules(columnValues: Record<string, string[]>): Promise<ParseRuleSuggestion[]> {
-    if (!this.conn || !this.db) {
-      throw new Error('DuckDB engine is not available — cannot suggest parse rules.');
-    }
-
-    const columns = Object.keys(columnValues);
-    if (columns.length === 0) return [];
-
-    const rowCount = Math.max(...columns.map(c => columnValues[c].length));
-    const rows: Record<string, string>[] = [];
-    for (let i = 0; i < rowCount; i++) {
-      const row: Record<string, string> = {};
-      for (const col of columns) row[col] = columnValues[col][i] ?? '';
-      rows.push(row);
-    }
-
-    const sniffId = `_sniff_${Date.now()}_${Math.round(Math.random() * 1e6)}`;
-    await this.db.registerFileText(`${sniffId}.json`, JSON.stringify(rows));
-    await this.conn.query(`CREATE TEMP TABLE "${sniffId}" AS SELECT * FROM read_json_auto('${sniffId}.json')`);
-
-    try {
-      const selectParts: string[] = [];
-      for (const col of columns) {
-        selectParts.push(`count(*) FILTER (WHERE "${col}" IS NOT NULL AND "${col}" != '') AS "${col}____non_empty"`);
-        ALL_HYPOTHESES.forEach((hyp, i) => {
-          selectParts.push(`count(*) FILTER (WHERE ${hyp.predicate(col)} IS NOT NULL) AS "${col}____h${i}"`);
-        });
+    return this.enqueue(async () => {
+      if (!this.conn || !this.db) {
+        throw new Error('DuckDB engine is not available — cannot suggest parse rules.');
       }
 
-      const result = await this.conn.query(`SELECT ${selectParts.join(', ')} FROM "${sniffId}"`);
-      const counts = result.toArray()[0].toJSON();
+      const columns = Object.keys(columnValues);
+      if (columns.length === 0) return [];
 
-      const suggestions: ParseRuleSuggestion[] = [];
-      for (const col of columns) {
-        const nonEmpty = Number(counts[`${col}____non_empty`]);
-        if (nonEmpty === 0) continue;
+      const rowCount = Math.max(...columns.map(c => columnValues[c].length));
+      const rows: Record<string, string>[] = [];
+      for (let i = 0; i < rowCount; i++) {
+        const row: Record<string, string> = {};
+        for (const col of columns) row[col] = columnValues[col][i] ?? '';
+        rows.push(row);
+      }
 
-        const qualifying = ALL_HYPOTHESES.map((hyp, i) => ({
-          hyp,
-          confidence: Number(counts[`${col}____h${i}`]) / nonEmpty,
-        })).filter(h => h.confidence >= CONFIDENCE_THRESHOLD);
+      const sniffId = `_sniff_${Date.now()}_${Math.round(Math.random() * 1e6)}`;
+      await this.db.registerFileText(`${sniffId}.json`, JSON.stringify(rows));
+      await this.conn.query(`CREATE TEMP TABLE "${sniffId}" AS SELECT * FROM read_json_auto('${sniffId}.json')`);
 
-        if (qualifying.length === 0) continue;
-
-        const sampleValues = columnValues[col].filter(v => v.trim() !== '').slice(0, 5);
-        const toSuggestion = (hyp: ParseHypothesis, confidence: number): ParseRuleSuggestion => ({
-          column: col,
-          rule: hyp.rule,
-          label: hyp.label,
-          confidence,
-          sampleBefore: sampleValues,
-          sampleAfter: sampleValues.map(v => applyParseRule(v, hyp.rule)),
-        });
-
-        const qualifyingDates = qualifying.filter(q => q.hyp.isDate);
-        if (qualifyingDates.length > 1) {
-          // Genuinely ambiguous (e.g. every day value happens to be ≤12) —
-          // list every candidate, pick none.
-          const alts = qualifyingDates.map(q => toSuggestion(q.hyp, q.confidence));
-          suggestions.push({ ...alts[0], alternatives: alts });
-          continue;
+      try {
+        const selectParts: string[] = [];
+        for (const col of columns) {
+          selectParts.push(`count(*) FILTER (WHERE "${col}" IS NOT NULL AND "${col}" != '') AS "${col}____non_empty"`);
+          ALL_HYPOTHESES.forEach((hyp, i) => {
+            selectParts.push(`count(*) FILTER (WHERE ${hyp.predicate(col)} IS NOT NULL) AS "${col}____h${i}"`);
+          });
         }
 
-        const best = qualifying.reduce((a, b) => (b.confidence > a.confidence ? b : a));
-        suggestions.push(toSuggestion(best.hyp, best.confidence));
-      }
+        const result = await this.conn.query(`SELECT ${selectParts.join(', ')} FROM "${sniffId}"`);
+        const counts = result.toArray()[0].toJSON();
 
-      return suggestions;
-    } finally {
-      await this.conn.query(`DROP TABLE IF EXISTS "${sniffId}"`).catch(() => {});
-    }
+        const suggestions: ParseRuleSuggestion[] = [];
+        for (const col of columns) {
+          const nonEmpty = Number(counts[`${col}____non_empty`]);
+          if (nonEmpty === 0) continue;
+
+          const qualifying = ALL_HYPOTHESES.map((hyp, i) => ({
+            hyp,
+            confidence: Number(counts[`${col}____h${i}`]) / nonEmpty,
+          })).filter(h => h.confidence >= CONFIDENCE_THRESHOLD);
+
+          if (qualifying.length === 0) continue;
+
+          const sampleValues = columnValues[col].filter(v => v.trim() !== '').slice(0, 5);
+          const toSuggestion = (hyp: ParseHypothesis, confidence: number): ParseRuleSuggestion => ({
+            column: col,
+            rule: hyp.rule,
+            label: hyp.label,
+            confidence,
+            sampleBefore: sampleValues,
+            sampleAfter: sampleValues.map(v => applyParseRule(v, hyp.rule)),
+          });
+
+          const qualifyingDates = qualifying.filter(q => q.hyp.isDate);
+          if (qualifyingDates.length > 1) {
+            // Genuinely ambiguous (e.g. every day value happens to be ≤12) —
+            // list every candidate, pick none.
+            const alts = qualifyingDates.map(q => toSuggestion(q.hyp, q.confidence));
+            suggestions.push({ ...alts[0], alternatives: alts });
+            continue;
+          }
+
+          const best = qualifying.reduce((a, b) => (b.confidence > a.confidence ? b : a));
+          suggestions.push(toSuggestion(best.hyp, best.confidence));
+        }
+
+        return suggestions;
+      } finally {
+        await this.conn.query(`DROP TABLE IF EXISTS "${sniffId}"`).catch(() => {});
+      }
+    });
   }
 
   async query(sql: string): Promise<QueryResult> {
-    if (!this.conn) {
-      throw new Error(
-        this.initError ? `SQL engine unavailable: ${this.initError}` : 'SQL engine is not ready yet.'
+    return this.enqueue(async () => {
+      if (!this.conn) {
+        throw new Error(
+          this.initError ? `SQL engine unavailable: ${this.initError}` : 'SQL engine is not ready yet.'
+        );
+      }
+
+      const start = performance.now();
+      const arrowTable = await this.conn.query(sql);
+      const columns = arrowTable.schema.fields.map(f => f.name);
+
+      // Arrow's row.toJSON() hands back DATE/TIMESTAMP columns as raw epoch
+      // milliseconds (confirmed live: a TIMESTAMP column came back as
+      // 1786010400000, not a readable date) — convert those specific
+      // columns to ISO strings using the Arrow schema's own type IDs,
+      // rather than guessing from a column name or value shape.
+      const temporalCols = new Set(
+        arrowTable.schema.fields
+          .filter(f => f.type.typeId === ARROW_TYPE_ID_DATE || f.type.typeId === ARROW_TYPE_ID_TIMESTAMP)
+          .map(f => f.name)
       );
-    }
+      const rows = arrowTable.toArray().map(row => {
+        const obj = row.toJSON();
+        for (const col of columns) {
+          if (typeof obj[col] === 'bigint') {
+            // BIGINT/COUNT(*) columns arrive as native BigInt — not
+            // JSON-serializable, and QueryResult shouldn't leak a type its
+            // own interface (rows: any[]) implies is plain data. Confirmed
+            // live: JSON.stringify on a raw query result throws exactly
+            // here. Keep exact precision as a string past safe-integer
+            // range rather than silently losing digits.
+            obj[col] = Number.isSafeInteger(Number(obj[col])) ? Number(obj[col]) : obj[col].toString();
+          } else if (temporalCols.has(col) && typeof obj[col] === 'number') {
+            obj[col] = new Date(obj[col]).toISOString();
+          }
+        }
+        return obj;
+      });
 
-    const start = performance.now();
-    const arrowTable = await this.conn.query(sql);
-    const rows = arrowTable.toArray().map(row => row.toJSON());
-    const columns = arrowTable.schema.fields.map(f => f.name);
-
-    return {
-      columns,
-      rows,
-      rowCount: rows.length,
-      durationMs: Math.round((performance.now() - start) * 100) / 100,
-    };
+      return {
+        columns,
+        rows,
+        rowCount: rows.length,
+        durationMs: Math.round((performance.now() - start) * 100) / 100,
+      };
+    });
   }
 
   /** Real Parquet, via DuckDB's own COPY — not a JSON blob wearing a .parquet name. */
   async exportParquet(tableName: string): Promise<Uint8Array> {
-    if (!this.conn || !this.db) {
-      throw new Error('DuckDB engine is not available — cannot export Parquet.');
-    }
+    return this.enqueue(async () => {
+      if (!this.conn || !this.db) {
+        throw new Error('DuckDB engine is not available — cannot export Parquet.');
+      }
 
-    const safeName = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
-    const fileName = `export_${safeName}.parquet`;
+      const safeName = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
+      const fileName = `export_${safeName}.parquet`;
 
-    await this.conn.query(`COPY "${safeName}" TO '${fileName}' (FORMAT PARQUET, COMPRESSION ZSTD)`);
-    return await this.db.copyFileToBuffer(fileName);
+      await this.conn.query(`COPY "${safeName}" TO '${fileName}' (FORMAT PARQUET, COMPRESSION ZSTD)`);
+      return await this.db.copyFileToBuffer(fileName);
+    });
   }
 
   terminate(): void {
