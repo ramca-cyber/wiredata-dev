@@ -100,9 +100,12 @@
       <li>Click the <strong>WireData toolbar icon (W)</strong> on this browser tab to open the Side Panel.</li>
       <li>In the Side Panel, click <strong>"⏺ Start Capture"</strong> (REC status appears).</li>
       <li>Click the <strong>"🚀 Generate JSON API Request"</strong> button below.</li>
-      <li>Notice the Side Panel immediately increments to <strong>1 response</strong> and detects the <code>orders</code> dataset.</li>
+      <li>Notice the Side Panel immediately increments to <strong>1 response</strong> and detects the <code>orders</code> collection.</li>
       <li>Click <strong>"⏹ Stop Capture"</strong> in the Side Panel.</li>
-      <li>Click <strong>"Open Full Workbench ↗"</strong> — the captured <code>orders</code> collection is immediately loaded and ready for SQL queries.</li>
+      <li>Click <strong>"Open Full Workbench ↗"</strong> — verify the captured request appears in the list.</li>
+      <li>Switch to the <strong>Candidates</strong> tab in Workbench and click <strong>"⚡ Extract Combined Dataset"</strong> to create the <code>orders</code> table.</li>
+      <li>Switch to the <strong>SQL Runner</strong> tab and click <strong>"Run Query (Ctrl+Enter)"</strong> to query <code>SELECT * FROM orders LIMIT 20;</code> via DuckDB.</li>
+      <li><em>(Alternative)</em> Click <strong>"⚡ Load Sample Data"</strong> in the top bar to test analytical SQL immediately with 1 click.</li>
       <li><em>(Optional)</em> In the Side Panel, click <strong>"🔲 Scrape Table"</strong> to test one-time DOM table extraction from the table below.</li>
     </ol>
   </div>

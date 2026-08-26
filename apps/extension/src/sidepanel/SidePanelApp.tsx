@@ -23,7 +23,7 @@ import { PageNetworkCaptureAdapter } from '../adapters/page.js';
 import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
 export function SidePanelApp() {
-  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.5';
+  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
@@ -242,8 +242,15 @@ export function SidePanelApp() {
       }
     } else {
       // Start
-      if (!activeTab?.id || !activeTab.url) {
-        setStartError('Please open an active web page tab first.');
+      if (
+        !activeTab?.id ||
+        !activeTab.url ||
+        activeTab.url.startsWith('chrome://') ||
+        activeTab.url.startsWith('chrome-extension://') ||
+        activeTab.url.startsWith('edge://') ||
+        activeTab.url.startsWith('about:')
+      ) {
+        setStartError('Please open a normal web page and click the WireData toolbar icon (W) to start capture.');
         return;
       }
 
@@ -364,13 +371,22 @@ export function SidePanelApp() {
     }
   };
 
-  const hostName = activeTab?.url ? (() => {
-    try {
-      return new URL(activeTab.url).hostname;
-    } catch {
-      return activeTab.url;
-    }
-  })() : 'No Active Tab';
+  const isRestrictedPage =
+    !activeTab?.url ||
+    activeTab.url.startsWith('chrome://') ||
+    activeTab.url.startsWith('chrome-extension://') ||
+    activeTab.url.startsWith('edge://') ||
+    activeTab.url.startsWith('about:');
+
+  const hostName = activeTab?.url && !isRestrictedPage
+    ? (() => {
+        try {
+          return new URL(activeTab.url).hostname;
+        } catch {
+          return activeTab.url;
+        }
+      })()
+    : null;
 
   return (
     <div
@@ -422,9 +438,20 @@ export function SidePanelApp() {
         <div style={{ fontSize: 11, color: colors.textDim, textTransform: 'uppercase', fontWeight: 600, marginBottom: 4 }}>
           Target Page
         </div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>
-          {hostName}
-        </div>
+        {hostName ? (
+          <div style={{ fontSize: 14, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>
+            {hostName}
+          </div>
+        ) : (
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: colors.warning }}>
+              ⚠️ No Active Web Page
+            </div>
+            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>
+              Open any website and click the WireData toolbar icon (W).
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Status & Privacy Banner */}
@@ -489,16 +516,21 @@ export function SidePanelApp() {
 
         <button
           onClick={handleToggleCapture}
+          disabled={!isCapturing && isRestrictedPage}
           style={{
-            background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
-            color: '#ffffff',
-            border: 'none',
+            background: isCapturing
+              ? colors.error
+              : isRestrictedPage
+                ? colors.cardBg
+                : 'linear-gradient(135deg, #0284c7, #2563eb)',
+            color: isRestrictedPage && !isCapturing ? colors.textDim : '#ffffff',
+            border: isRestrictedPage && !isCapturing ? `1px solid ${colors.border}` : 'none',
             borderRadius: 6,
             padding: '10px 16px',
             fontSize: 13,
             fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
+            cursor: isRestrictedPage && !isCapturing ? 'not-allowed' : 'pointer',
+            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : isRestrictedPage ? 'none' : '0 4px 12px rgba(2, 132, 199, 0.3)',
           }}
         >
           {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
