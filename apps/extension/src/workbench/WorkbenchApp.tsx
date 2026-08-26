@@ -754,6 +754,21 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     setCandidatesList([]);
   };
 
+  const handleClearAllDatasets = () => {
+    setDefinitions([]);
+    setSnapshots(new Map());
+    setActiveDatasetId(null);
+  };
+
+  const handleClearCandidates = () => {
+    setCandidatesList([]);
+  };
+
+  const handleDismissRouteGroup = (routeCaptures: CapturedRequest[]) => {
+    const captureIds = new Set(routeCaptures.map(c => c.capture_id));
+    setCandidatesList(prev => prev.filter(item => !captureIds.has(item.capture.capture_id)));
+  };
+
   const handleDismissCandidate = (captureId: ULID, pointer: string) => {
     setCandidatesList(prev =>
       prev
@@ -1048,8 +1063,28 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
             ⚡ SQL Workspace
           </button>
 
-          <div style={{ margin: '16px 8px 8px 8px', fontSize: 11, fontWeight: 700, color: colors.textDim, textTransform: 'uppercase' }}>
-            Datasets ({definitions.length})
+          <div style={{ margin: '16px 8px 8px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: colors.textDim, textTransform: 'uppercase' }}>
+              Datasets ({definitions.length})
+            </span>
+            {definitions.length > 0 && (
+              <button
+                onClick={handleClearAllDatasets}
+                title="Clear all datasets"
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${colors.error}44`,
+                  color: colors.error,
+                  borderRadius: 4,
+                  padding: '1px 6px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Clear All
+              </button>
+            )}
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1337,37 +1372,57 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                     Automatically grouped by logical API route. You can extract combined datasets across all paginated captures, generate TypeScript interfaces, or export JSONL.
                   </p>
                 </div>
-                <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 2, flexShrink: 0 }}>
-                  <button
-                    onClick={() => handleScopeChange('current')}
-                    style={{
-                      background: sessionScope === 'current' ? colors.hoverBg : 'transparent',
-                      color: sessionScope === 'current' ? colors.primaryLight : colors.textMuted,
-                      border: 'none',
-                      borderRadius: 4,
-                      padding: '4px 10px',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    🌐 Current Page Only
-                  </button>
-                  <button
-                    onClick={() => handleScopeChange('all')}
-                    style={{
-                      background: sessionScope === 'all' ? colors.hoverBg : 'transparent',
-                      color: sessionScope === 'all' ? colors.primaryLight : colors.textMuted,
-                      border: 'none',
-                      borderRadius: 4,
-                      padding: '4px 10px',
-                      fontSize: 11,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    📁 All Workspace ({allSessions.length})
-                  </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 2, flexShrink: 0 }}>
+                    <button
+                      onClick={() => handleScopeChange('current')}
+                      style={{
+                        background: sessionScope === 'current' ? colors.hoverBg : 'transparent',
+                        color: sessionScope === 'current' ? colors.primaryLight : colors.textMuted,
+                        border: 'none',
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      🌐 Current Page Only
+                    </button>
+                    <button
+                      onClick={() => handleScopeChange('all')}
+                      style={{
+                        background: sessionScope === 'all' ? colors.hoverBg : 'transparent',
+                        color: sessionScope === 'all' ? colors.primaryLight : colors.textMuted,
+                        border: 'none',
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      📁 All Workspace ({allSessions.length})
+                    </button>
+                  </div>
+                  {candidatesList.length > 0 && (
+                    <button
+                      onClick={handleClearCandidates}
+                      title="Clear all discovered candidates"
+                      style={{
+                        background: 'transparent',
+                        border: `1px solid ${colors.error}44`,
+                        color: colors.error,
+                        borderRadius: 6,
+                        padding: '6px 12px',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Clear Candidates
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1461,6 +1516,21 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                           <span>
                             <strong style={{ color: colors.text }}>{routeGroup.total_captures}</strong> {routeGroup.total_captures === 1 ? 'capture' : 'captures (paginated/repeated)'}
                           </span>
+                          <button
+                            onClick={() => handleDismissRouteGroup(routeGroup.captures)}
+                            title="Dismiss this candidate collection group"
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: colors.textDim,
+                              fontSize: 14,
+                              cursor: 'pointer',
+                              padding: '2px 6px',
+                              lineHeight: 1,
+                            }}
+                          >
+                            ✕
+                          </button>
                         </div>
                       </div>
 

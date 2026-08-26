@@ -613,6 +613,21 @@ export function SidePanelApp() {
     }
   };
 
+  const handleClearAllItems = () => {
+    if (viewScope === 'current') {
+      setDiscoveredItems([]);
+      setCaptureCount(0);
+      setTotalBytes(0);
+    } else {
+      setAllHistoryItems([]);
+    }
+  };
+
+  const handleRemoveItem = (name: string) => {
+    setDiscoveredItems(prev => prev.filter(x => x.name !== name));
+    setAllHistoryItems(prev => prev.filter(x => x.name !== name));
+  };
+
   const handleLoadSampleData = () => {
     const sampleOrders: DiscoveredItem = {
       name: 'orders',
@@ -719,9 +734,29 @@ export function SidePanelApp() {
 
         return (
           <div style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, letterSpacing: '0.04em' }}>
-                📦 Collections ({visibleItems.length})
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, letterSpacing: '0.04em' }}>
+                  📦 Collections ({visibleItems.length})
+                </span>
+                {allItems.length > 0 && (
+                  <button
+                    onClick={handleClearAllItems}
+                    title="Clear all discovered items"
+                    style={{
+                      background: 'transparent',
+                      border: `1px solid ${colors.error}44`,
+                      color: colors.error,
+                      borderRadius: 4,
+                      padding: '1px 6px',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Clear All
+                  </button>
+                )}
               </div>
               <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: 2 }}>
                 <button
@@ -798,15 +833,32 @@ export function SidePanelApp() {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontWeight: 700, fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>
                         {item.name}
                       </span>
-                      <span style={{ marginLeft: 6, fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
+                      <span style={{ fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
                         {item.rowCount} rows{item.capturesCount > 1 ? ` (${item.capturesCount} captures)` : ''}
                       </span>
                     </div>
-                    <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
+                      <button
+                        onClick={() => handleRemoveItem(item.name)}
+                        title={`Remove ${item.name}`}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: colors.textDim,
+                          fontSize: 13,
+                          cursor: 'pointer',
+                          padding: '0 4px',
+                          lineHeight: 1,
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
 
                   {/* Primary & Quick Actions Bar */}
