@@ -85,11 +85,13 @@ if (manifestEntry) {
     if (manifest.background?.type === 'module') {
       errors.push(`manifest.json background service worker must not have type: "module"`);
     }
-    if (manifest.web_accessible_resources) {
-      for (const war of manifest.web_accessible_resources) {
-        if (war.matches?.includes('<all_urls>')) {
-          warnings.push(`web_accessible_resources contains <all_urls> match pattern`);
-        }
+    if (manifest.content_security_policy?.extension_pages) {
+      const csp = manifest.content_security_policy.extension_pages;
+      if (csp.includes('blob:')) {
+        errors.push(`manifest content_security_policy.extension_pages contains illegal 'blob:' directive`);
+      }
+      if (csp.includes('unsafe-eval') && !csp.includes('wasm-unsafe-eval')) {
+        errors.push(`manifest CSP contains disallowed 'unsafe-eval'`);
       }
     }
     console.log(`  ✓ manifest.json validated (MV3, version ${manifest.version}, permissions: [${manifest.permissions?.join(', ')}])`);
