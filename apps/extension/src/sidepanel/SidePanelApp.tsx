@@ -26,6 +26,7 @@ import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 interface DiscoveredItem {
   name: string;
   rowCount: number;
+  capturesCount: number;
   source: string;
   rows: Record<string, any>[];
 }
@@ -81,15 +82,19 @@ export function SidePanelApp() {
         }
 
         if (extractedRows.length > 0) {
-          setDiscoveredItems(prev => [
-            {
+          setDiscoveredItems(prev => {
+            const existing = prev.find(x => x.name === cand.suggested_name);
+            const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
+            const capturesCount = existing ? (existing.capturesCount || 1) + 1 : 1;
+            const updatedItem: DiscoveredItem = {
               name: cand.suggested_name,
-              rowCount: cand.row_count,
+              rowCount: combinedRows.length,
+              capturesCount,
               source: `JSON API (${capture.request.method})`,
-              rows: extractedRows,
-            },
-            ...prev.filter(x => x.name !== cand.suggested_name),
-          ]);
+              rows: combinedRows,
+            };
+            return [updatedItem, ...prev.filter(x => x.name !== cand.suggested_name)];
+          });
         }
       }
     }
@@ -356,15 +361,19 @@ export function SidePanelApp() {
 
       if (outcome.body?.rows && outcome.body.rows.length > 0) {
         const tableName = outcome.candidates[0]?.suggested_name || 'scraped_table';
-        setDiscoveredItems(prev => [
-          {
+        setDiscoveredItems(prev => {
+          const existing = prev.find(x => x.name === tableName);
+          const combinedRows = existing ? [...existing.rows, ...outcome.body.rows] : outcome.body.rows;
+          const capturesCount = existing ? (existing.capturesCount || 1) + 1 : 1;
+          const updatedItem: DiscoveredItem = {
             name: tableName,
-            rowCount: outcome.rowCount,
+            rowCount: combinedRows.length,
+            capturesCount,
             source: outcome.strategy === 'table' ? 'DOM Table' : 'Virtualized Grid',
-            rows: outcome.body.rows,
-          },
-          ...prev.filter(x => x.name !== tableName),
-        ]);
+            rows: combinedRows,
+          };
+          return [updatedItem, ...prev.filter(x => x.name !== tableName)];
+        });
       }
 
       await workspaceManager.saveCapture(session.session_id, outcome.capture, outcome.body);
@@ -418,6 +427,7 @@ export function SidePanelApp() {
     const sampleOrders: DiscoveredItem = {
       name: 'orders',
       rowCount: 5,
+      capturesCount: 1,
       source: 'Sample Data',
       rows: [
         { id: 'ORD-1001', customer: 'Alice Smith', email: 'alice@example.com', items_count: 3, total_amount: 149.99, status: 'completed' },
@@ -430,6 +440,7 @@ export function SidePanelApp() {
     const sampleProducts: DiscoveredItem = {
       name: 'products',
       rowCount: 4,
+      capturesCount: 1,
       source: 'Sample Data',
       rows: [
         { id: 'PROD-101', name: 'Wireless Keyboard', category: 'Hardware', in_stock: true, unit_price: 129.99 },
@@ -510,7 +521,9 @@ export function SidePanelApp() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
                     <span style={{ fontWeight: 700, fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>{item.name}</span>
-                    <span style={{ marginLeft: 6, fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>{item.rowCount} rows</span>
+                    <span style={{ marginLeft: 6, fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
+                      {item.rowCount} rows{item.capturesCount > 1 ? ` (${item.capturesCount} captures)` : ''}
+                    </span>
                   </div>
                   <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
                 </div>
