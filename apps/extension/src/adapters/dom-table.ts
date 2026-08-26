@@ -45,7 +45,7 @@ export async function captureTableFromActiveTab(
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: extractDomTable,
-    args: [rootSelector],
+    args: rootSelector ? [rootSelector] : [],
   });
 
   const result = results?.[0]?.result as DomExtractionResult | null | undefined;
