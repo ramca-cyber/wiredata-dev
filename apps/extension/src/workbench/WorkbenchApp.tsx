@@ -49,6 +49,70 @@ export interface WorkbenchAppProps {
   hostMode: 'devtools' | 'fulltab';
 }
 
+// Generate clean TypeScript interface and JSON Schema from sample records
+function generateTypesFromRows(name: string, rows: Record<string, any>[]): { tsInterface: string; jsonSchema: string } {
+  const safeName = name.replace(/(?:^\w|[A-Z]|\b\w)/g, l => l.toUpperCase()).replace(/[\s\W_]+/g, '') || 'Item';
+  if (!rows || rows.length === 0) {
+    return {
+      tsInterface: `export interface ${safeName} {\n  [key: string]: unknown;\n}`,
+      jsonSchema: JSON.stringify({ $schema: 'http://json-schema.org/draft-07/schema#', title: safeName, type: 'object', properties: {} }, null, 2),
+    };
+  }
+
+  const keys = Object.keys(rows[0]);
+  const lines = [`export interface ${safeName} {`];
+  const properties: Record<string, any> = {};
+
+  for (const k of keys) {
+    const sampleValues = rows.slice(0, 25).map(r => r[k]).filter(v => v !== null && v !== undefined);
+    let sampleType = 'string';
+    let jsonType = 'string';
+
+    if (sampleValues.length > 0) {
+      const val = sampleValues[0];
+      if (typeof val === 'boolean') {
+        sampleType = 'boolean';
+        jsonType = 'boolean';
+      } else if (typeof val === 'number') {
+        sampleType = 'number';
+        jsonType = Number.isInteger(val) ? 'integer' : 'number';
+      } else if (Array.isArray(val)) {
+        sampleType = 'unknown[]';
+        jsonType = 'array';
+      } else if (typeof val === 'object') {
+        sampleType = 'Record<string, unknown>';
+        jsonType = 'object';
+      } else if (typeof val === 'string') {
+        sampleType = 'string';
+        jsonType = 'string';
+      }
+    }
+
+    const keyIdent = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
+    lines.push(`  ${keyIdent}: ${sampleType};`);
+    properties[k] = { type: jsonType };
+  }
+  lines.push('}');
+
+  const schemaObj = {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    title: safeName,
+    type: 'object',
+    properties,
+  };
+
+  return {
+    tsInterface: lines.join('\n'),
+    jsonSchema: JSON.stringify(schemaObj, null, 2),
+  };
+}
+
+function generateCurlCommand(capture: CapturedRequest): string {
+  const url = capture.request.sanitized_url || capture.request.url;
+  const method = capture.request.method || 'GET';
+  return `curl -X ${method} '${url}' \\\n  -H 'Accept: application/json'`;
+}
+
 function generateOrdersMock(page: number, pageSize: number = 100) {
   const startId = (page - 1) * pageSize + 1;
   const orders = [];
@@ -124,6 +188,14 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const [sessionScope, setSessionScope] = useState<'current' | 'all'>('current');
   const [allSessions, setAllSessions] = useState<CaptureSession[]>([]);
 
+  // Search & Type Generation state
+  const [capturesSearch, setCapturesSearch] = useState<string>('');
+  const [candidatesSearch, setCandidatesSearch] = useState<string>('');
+  const [copiedCurlId, setCopiedCurlId] = useState<string | null>(null);
+  const [typeModalData, setTypeModalData] = useState<{ title: string; tsInterface: string; jsonSchema: string } | null>(null);
+  const [typeModalTab, setTypeModalTab] = useState<'ts' | 'schema'>('ts');
+  const [copiedTypeBadge, setCopiedTypeBadge] = useState<string | null>(null);
+
   // Selected provenance & modals
   const [selectedRow, setSelectedRow] = useState<ExtractedRow | null>(null);
   const [rawViewerData, setRawViewerData] = useState<{ body: unknown; pointer: string } | null>(null);
@@ -139,6 +211,67 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
 
   // Adapter ref
   const adapterRef = useRef<ChromeNetworkCaptureAdapter | null>(null);
+
+  const handleCopyCurl = (capture: CapturedRequest) => {
+    const cmd = generateCurlCommand(capture);
+    navigator.clipboard.writeText(cmd);
+    setCopiedCurlId(capture.capture_id);
+    setTimeout(() => setCopiedCurlId(null), 2000);
+  };
+
+  const handleShowTypeModal = (name: string, sampleKeys: string[], pointer: string, capturesForRoute: CapturedRequest[]) => {
+    const sampleRows: Record<string, any>[] = [];
+    for (const cap of capturesForRoute) {
+      if (!cap.response.body_hash) continue;
+      const body = responseBodiesRef.current.get(cap.response.body_hash);
+      if (!body) continue;
+      if (!pointer || pointer === '' || pointer === '/') {
+        if (Array.isArray(body)) sampleRows.push(...body.slice(0, 10));
+      } else {
+        try {
+          const parts = pointer.replace(/^\//, '').split('/');
+          let cur: any = body;
+          for (const p of parts) if (cur && typeof cur === 'object') cur = cur[p];
+          if (Array.isArray(cur)) sampleRows.push(...cur.slice(0, 10));
+        } catch {}
+      }
+    }
+
+    const { tsInterface, jsonSchema } = generateTypesFromRows(
+      name,
+      sampleRows.length > 0 ? sampleRows : [Object.fromEntries(sampleKeys.map(k => [k, 'string']))]
+    );
+    setTypeModalData({ title: name, tsInterface, jsonSchema });
+    setTypeModalTab('ts');
+  };
+
+  const handleExportCandidateJsonl = (name: string, pointer: string, capturesForRoute: CapturedRequest[]) => {
+    const rows: Record<string, any>[] = [];
+    for (const cap of capturesForRoute) {
+      if (!cap.response.body_hash) continue;
+      const body = responseBodiesRef.current.get(cap.response.body_hash);
+      if (!body) continue;
+      if (!pointer || pointer === '' || pointer === '/') {
+        if (Array.isArray(body)) rows.push(...body);
+      } else {
+        try {
+          const parts = pointer.replace(/^\//, '').split('/');
+          let cur: any = body;
+          for (const p of parts) if (cur && typeof cur === 'object') cur = cur[p];
+          if (Array.isArray(cur)) rows.push(...cur);
+        } catch {}
+      }
+    }
+    if (rows.length === 0) return;
+    const content = rows.map(r => JSON.stringify(r)).join('\n');
+    const blob = new Blob([content], { type: 'application/x-ndjson;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.jsonl`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   /**
    * Loads persisted sessions (captures, body objects, dataset definitions).
@@ -249,6 +382,19 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
 
       await duckdbClient.init();
       setDuckdbStatus({ ready: duckdbClient.isEngineReady, error: duckdbClient.engineError });
+
+      // Support direct jump from Side Panel via URL parameters (e.g. ?sql=SELECT...&tab=sql)
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const sqlParam = urlParams.get('sql');
+        const tabParam = urlParams.get('tab');
+        if (sqlParam) {
+          setSqlQuery(sqlParam);
+        }
+        if (tabParam === 'sql' || tabParam === 'candidates' || tabParam === 'captures' || tabParam === 'datasets') {
+          setActiveView(tabParam as ActiveView);
+        }
+      } catch {}
     };
 
     initSession();
@@ -1027,6 +1173,27 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                   </button>
                 )}
               </div>
+              {captures.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <input
+                    type="text"
+                    placeholder="🔍 Filter captures by URL, HTTP method, or status..."
+                    value={capturesSearch}
+                    onChange={e => setCapturesSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      background: colors.cardBg,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: 6,
+                      padding: '8px 12px',
+                      fontSize: 12,
+                      color: colors.text,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              )}
               <div
                 style={{
                   flex: 1,
@@ -1051,7 +1218,14 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                     </p>
                   </div>
                 ) : (
-                  captures.map(c => (
+                  (capturesSearch.trim()
+                    ? captures.filter(c =>
+                        c.request.sanitized_url.toLowerCase().includes(capturesSearch.toLowerCase()) ||
+                        c.request.method.toLowerCase().includes(capturesSearch.toLowerCase()) ||
+                        String(c.response.status).includes(capturesSearch)
+                      )
+                    : captures
+                  ).map(c => (
                     <div
                       key={c.capture_id}
                       style={{
@@ -1076,7 +1250,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                           {c.request.sanitized_url}
                         </span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ color: c.response.status === 200 ? colors.success : colors.error, fontWeight: 600 }}>
                           {c.response.status}
                         </span>
@@ -1093,9 +1267,24 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                               borderRadius: 4,
                             }}
                           >
-                            ⚠ {c.classification.sensitive_response_fields.length} sensitive-looking field{c.classification.sensitive_response_fields.length > 1 ? 's' : ''}
+                            ⚠ {c.classification.sensitive_response_fields.length} sensitive field{c.classification.sensitive_response_fields.length > 1 ? 's' : ''}
                           </span>
                         )}
+                        <button
+                          onClick={() => handleCopyCurl(c)}
+                          title="Copy as cURL command"
+                          style={{
+                            background: 'transparent',
+                            border: `1px solid ${colors.borderLight}`,
+                            color: copiedCurlId === c.capture_id ? colors.success : colors.primaryLight,
+                            borderRadius: 4,
+                            padding: '2px 8px',
+                            fontSize: 11,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {copiedCurlId === c.capture_id ? '✓ cURL' : '📋 cURL'}
+                        </button>
                         {c.response.body_hash && (
                           <button
                             onClick={() => handleShowRaw(c.response.body_hash, '/')}
@@ -1143,7 +1332,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                     Discovered Data Collections
                   </h2>
                   <p style={{ margin: 0, color: colors.textMuted, fontSize: 13 }}>
-                    Automatically grouped by logical API route. You can extract combined datasets across all paginated captures or extract individual requests and nested sub-collections.
+                    Automatically grouped by logical API route. You can extract combined datasets across all paginated captures, generate TypeScript interfaces, or export JSONL.
                   </p>
                 </div>
                 <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 2, flexShrink: 0 }}>
@@ -1180,13 +1369,45 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                 </div>
               </div>
 
+              {/* Candidates Search Filter */}
+              {groupedRouteCandidates.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <input
+                    type="text"
+                    placeholder="🔍 Filter routes, candidate collection names, or fields..."
+                    value={candidatesSearch}
+                    onChange={e => setCandidatesSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      background: colors.cardBg,
+                      border: `1px solid ${colors.borderLight}`,
+                      borderRadius: 6,
+                      padding: '8px 12px',
+                      fontSize: 12,
+                      color: colors.text,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              )}
+
               {groupedRouteCandidates.length === 0 ? (
                 <div style={{ color: colors.textDim, padding: 40, textAlign: 'center', background: colors.cardBg, borderRadius: 8, border: `1px solid ${colors.border}` }}>
                   No dataset candidates detected in captured traffic yet.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                  {groupedRouteCandidates.map(routeGroup => (
+                  {(candidatesSearch.trim()
+                    ? groupedRouteCandidates.filter(rg =>
+                        rg.route_template.toLowerCase().includes(candidatesSearch.toLowerCase()) ||
+                        rg.collections.some(c =>
+                          c.suggested_name.toLowerCase().includes(candidatesSearch.toLowerCase()) ||
+                          c.sample_keys.some(k => k.toLowerCase().includes(candidatesSearch.toLowerCase()))
+                        )
+                      )
+                    : groupedRouteCandidates
+                  ).map(routeGroup => (
                     <div
                       key={routeGroup.route_id}
                       style={{
@@ -1323,6 +1544,40 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                                   }}
                                 >
                                   ⚡ Extract Combined Dataset ({col.total_rows} rows from {routeGroup.total_captures} {routeGroup.total_captures === 1 ? 'capture' : 'pages'})
+                                </button>
+
+                                <button
+                                  onClick={() => handleShowTypeModal(col.suggested_name, col.sample_keys, col.pointer, routeGroup.captures)}
+                                  title="Inspect & Copy TypeScript Interface or JSON Schema"
+                                  style={{
+                                    background: colors.cardBg,
+                                    color: colors.accent,
+                                    border: `1px solid ${colors.accent}44`,
+                                    borderRadius: 6,
+                                    padding: '8px 14px',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  📄 TypeScript / Schema
+                                </button>
+
+                                <button
+                                  onClick={() => handleExportCandidateJsonl(col.suggested_name, col.pointer, routeGroup.captures)}
+                                  title="Download as JSON Lines (.jsonl)"
+                                  style={{
+                                    background: colors.cardBg,
+                                    color: colors.primaryLight,
+                                    border: `1px solid ${colors.borderLight}`,
+                                    borderRadius: 6,
+                                    padding: '8px 14px',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  📄 JSONL
                                 </button>
 
                                 {routeGroup.total_captures > 1 && (
@@ -1878,6 +2133,127 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive TypeScript & JSON Schema Modal */}
+      {typeModalData && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000,
+            padding: 24,
+          }}
+          onClick={() => setTypeModalData(null)}
+        >
+          <div
+            style={{
+              background: colors.cardBg,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              width: '100%',
+              maxWidth: 700,
+              height: '80vh',
+              maxHeight: 600,
+              overflow: 'hidden',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <strong style={{ fontSize: 16, color: colors.primaryLight, fontFamily: fonts.mono }}>
+                  {typeModalData.title}
+                </strong>
+                <span style={{ fontSize: 12, color: colors.textDim, marginLeft: 10 }}>
+                  Generated Schema & Interface
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    const text = typeModalTab === 'ts' ? typeModalData.tsInterface : typeModalData.jsonSchema;
+                    navigator.clipboard.writeText(text);
+                    setCopiedTypeBadge('modal');
+                    setTimeout(() => setCopiedTypeBadge(null), 2000);
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, #0284c7, #2563eb)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '6px 14px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {copiedTypeBadge === 'modal' ? '✓ Copied to Clipboard!' : '📋 Copy to Clipboard'}
+                </button>
+                <button
+                  onClick={() => setTypeModalData(null)}
+                  style={{
+                    background: colors.panelBg,
+                    border: `1px solid ${colors.borderLight}`,
+                    color: colors.text,
+                    borderRadius: 6,
+                    padding: '6px 12px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', background: colors.panelBg, borderBottom: `1px solid ${colors.border}`, padding: '6px 16px', gap: 6 }}>
+              <button
+                onClick={() => setTypeModalTab('ts')}
+                style={{
+                  background: typeModalTab === 'ts' ? colors.cardBg : 'transparent',
+                  color: typeModalTab === 'ts' ? colors.primaryLight : colors.textMuted,
+                  border: `1px solid ${typeModalTab === 'ts' ? colors.borderLight : 'transparent'}`,
+                  borderRadius: 6,
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                📄 TypeScript Interface
+              </button>
+              <button
+                onClick={() => setTypeModalTab('schema')}
+                style={{
+                  background: typeModalTab === 'schema' ? colors.cardBg : 'transparent',
+                  color: typeModalTab === 'schema' ? colors.accent : colors.textMuted,
+                  border: `1px solid ${typeModalTab === 'schema' ? colors.borderLight : 'transparent'}`,
+                  borderRadius: 6,
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                📋 JSON Schema
+              </button>
+            </div>
+
+            <div style={{ flex: 1, padding: 16, overflow: 'auto' }}>
+              <pre style={{ margin: 0, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 16, fontSize: 12, fontFamily: fonts.mono, color: typeModalTab === 'ts' ? colors.primaryLight : colors.accent, overflow: 'auto' }}>
+                {typeModalTab === 'ts' ? typeModalData.tsInterface : typeModalData.jsonSchema}
+              </pre>
             </div>
           </div>
         </div>

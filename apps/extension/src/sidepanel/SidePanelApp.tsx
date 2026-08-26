@@ -1,7 +1,8 @@
 /**
  * WireData Side Panel Companion App
  * Capture controller, visible privacy status indicator, quick dataset counters,
- * inline table previewer, 1-click CSV export, and full workbench launcher.
+ * inline table previewer, TypeScript interface generator, JSON Schema export,
+ * 1-click CSV/JSONL export, and SQL runner launcher.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -32,6 +33,64 @@ interface DiscoveredItem {
   rows: Record<string, any>[];
 }
 
+// Generate clean TypeScript interface and JSON Schema from sample records
+function generateTypesFromRows(name: string, rows: Record<string, any>[]): { tsInterface: string; jsonSchema: string } {
+  const safeName = name.replace(/(?:^\w|[A-Z]|\b\w)/g, l => l.toUpperCase()).replace(/[\s\W_]+/g, '') || 'Item';
+  if (!rows || rows.length === 0) {
+    return {
+      tsInterface: `export interface ${safeName} {\n  [key: string]: unknown;\n}`,
+      jsonSchema: JSON.stringify({ $schema: 'http://json-schema.org/draft-07/schema#', title: safeName, type: 'object', properties: {} }, null, 2),
+    };
+  }
+
+  const keys = Object.keys(rows[0]);
+  const lines = [`export interface ${safeName} {`];
+  const properties: Record<string, any> = {};
+
+  for (const k of keys) {
+    const sampleValues = rows.slice(0, 25).map(r => r[k]).filter(v => v !== null && v !== undefined);
+    let sampleType = 'string';
+    let jsonType = 'string';
+
+    if (sampleValues.length > 0) {
+      const val = sampleValues[0];
+      if (typeof val === 'boolean') {
+        sampleType = 'boolean';
+        jsonType = 'boolean';
+      } else if (typeof val === 'number') {
+        sampleType = 'number';
+        jsonType = Number.isInteger(val) ? 'integer' : 'number';
+      } else if (Array.isArray(val)) {
+        sampleType = 'unknown[]';
+        jsonType = 'array';
+      } else if (typeof val === 'object') {
+        sampleType = 'Record<string, unknown>';
+        jsonType = 'object';
+      } else if (typeof val === 'string') {
+        sampleType = 'string';
+        jsonType = 'string';
+      }
+    }
+
+    const keyIdent = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k) ? k : JSON.stringify(k);
+    lines.push(`  ${keyIdent}: ${sampleType};`);
+    properties[k] = { type: jsonType };
+  }
+  lines.push('}');
+
+  const schemaObj = {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    title: safeName,
+    type: 'object',
+    properties,
+  };
+
+  return {
+    tsInterface: lines.join('\n'),
+    jsonSchema: JSON.stringify(schemaObj, null, 2),
+  };
+}
+
 export function SidePanelApp() {
   const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
@@ -47,8 +106,10 @@ export function SidePanelApp() {
   const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
   const [allHistoryItems, setAllHistoryItems] = useState<DiscoveredItem[]>([]);
   const [viewScope, setViewScope] = useState<'current' | 'all'>('current');
-  const [copiedName, setCopiedName] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [copiedBadge, setCopiedBadge] = useState<string | null>(null);
   const [previewItem, setPreviewItem] = useState<DiscoveredItem | null>(null);
+  const [previewTab, setPreviewTab] = useState<'table' | 'typescript' | 'schema' | 'json'>('table');
 
   // Workspace: defaults to shared browser-local IndexedDB storage
   const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
@@ -446,6 +507,7 @@ export function SidePanelApp() {
     }
   };
 
+  // 1-Click CSV Export
   const handleExportCsv = (item: DiscoveredItem) => {
     if (!item.rows || item.rows.length === 0) return;
     const headers = Object.keys(item.rows[0]);
@@ -467,10 +529,53 @@ export function SidePanelApp() {
     URL.revokeObjectURL(url);
   };
 
+  // 1-Click JSONL Export
+  const handleExportJsonl = (item: DiscoveredItem) => {
+    if (!item.rows || item.rows.length === 0) return;
+    const content = item.rows.map(r => JSON.stringify(r)).join('\n');
+    const blob = new Blob([content], { type: 'application/x-ndjson;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${item.name}.jsonl`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 1-Click Copy JSON
   const handleCopyJson = (item: DiscoveredItem) => {
     navigator.clipboard.writeText(JSON.stringify(item.rows, null, 2));
-    setCopiedName(item.name);
-    setTimeout(() => setCopiedName(null), 2000);
+    setCopiedBadge(`${item.name}_json`);
+    setTimeout(() => setCopiedBadge(null), 2000);
+  };
+
+  // 1-Click Copy TypeScript Interface
+  const handleCopyTypes = (item: DiscoveredItem) => {
+    const { tsInterface } = generateTypesFromRows(item.name, item.rows);
+    navigator.clipboard.writeText(tsInterface);
+    setCopiedBadge(`${item.name}_ts`);
+    setTimeout(() => setCopiedBadge(null), 2000);
+  };
+
+  // 1-Click Copy JSON Schema
+  const handleCopySchema = (item: DiscoveredItem) => {
+    const { jsonSchema } = generateTypesFromRows(item.name, item.rows);
+    navigator.clipboard.writeText(jsonSchema);
+    setCopiedBadge(`${item.name}_schema`);
+    setTimeout(() => setCopiedBadge(null), 2000);
+  };
+
+  // 1-Click SQL Runner Jump
+  const handleJumpToSql = (item: DiscoveredItem) => {
+    const query = `SELECT * FROM ${item.name} LIMIT 50;`;
+    const targetUrl = chrome?.runtime?.getURL
+      ? chrome.runtime.getURL(`workbench.html?sql=${encodeURIComponent(query)}&tab=sql`)
+      : `/workbench.html?sql=${encodeURIComponent(query)}&tab=sql`;
+    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+      chrome.tabs.create({ url: targetUrl });
+    } else {
+      window.open(targetUrl, '_blank');
+    }
   };
 
   const handleLoadSampleData = () => {
@@ -517,6 +622,7 @@ export function SidePanelApp() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: colors.bg, fontFamily: fonts.body, color: colors.text, padding: 16, userSelect: 'none', overflowY: 'auto' }}>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 24, height: 24, borderRadius: 6, background: 'linear-gradient(135deg, #0284c7, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, color: '#ffffff' }}>W</div>
@@ -526,6 +632,7 @@ export function SidePanelApp() {
         <button onClick={handleLoadSampleData} title="Instantly load sample datasets for testing" style={{ background: `${colors.accent}18`, border: `1px solid ${colors.accent}44`, color: colors.accent, borderRadius: 6, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>⚡ Sample Data</button>
       </div>
 
+      {/* Target Tab Host Card */}
       <div style={{ background: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 10, marginBottom: 12 }}>
         <div style={{ fontSize: 10, color: colors.textDim, textTransform: 'uppercase', fontWeight: 700, marginBottom: 2 }}>Target Page</div>
         {hostName ? (
@@ -543,6 +650,7 @@ export function SidePanelApp() {
         )}
       </div>
 
+      {/* Capture Controller Banner */}
       <div style={{ background: isCapturing ? `${colors.error}11` : colors.panelBg, border: `1px solid ${isCapturing ? colors.error : colors.borderLight}`, borderRadius: 10, padding: 14, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -564,8 +672,15 @@ export function SidePanelApp() {
 
       {/* Discovered Collections & Direct Actions (The Power Section) */}
       {(() => {
-        const visibleItems = viewScope === 'current' ? discoveredItems : (allHistoryItems.length > 0 ? allHistoryItems : discoveredItems);
-        if (visibleItems.length === 0 && discoveredItems.length === 0) return null;
+        const allItems = viewScope === 'current' ? discoveredItems : (allHistoryItems.length > 0 ? allHistoryItems : discoveredItems);
+        const visibleItems = searchQuery.trim()
+          ? allItems.filter(item =>
+              item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              (item.rows[0] && Object.keys(item.rows[0]).some(k => k.toLowerCase().includes(searchQuery.toLowerCase())))
+            )
+          : allItems;
+
+        if (allItems.length === 0 && discoveredItems.length === 0) return null;
 
         return (
           <div style={{ marginBottom: 12 }}>
@@ -610,6 +725,29 @@ export function SidePanelApp() {
               </div>
             </div>
 
+            {/* Quick Filter Search */}
+            {allItems.length > 1 && (
+              <div style={{ marginBottom: 8 }}>
+                <input
+                  type="text"
+                  placeholder="🔍 Filter collections or fields..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: colors.cardBg,
+                    border: `1px solid ${colors.borderLight}`,
+                    borderRadius: 6,
+                    padding: '6px 10px',
+                    fontSize: 11,
+                    color: colors.text,
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+            )}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {visibleItems.map(item => (
                 <div
@@ -636,54 +774,95 @@ export function SidePanelApp() {
                     <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
                   </div>
 
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  {/* Primary & Quick Actions Bar */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4 }}>
                     <button
-                      onClick={() => setPreviewItem(item)}
+                      onClick={() => {
+                        setPreviewItem(item);
+                        setPreviewTab('table');
+                      }}
+                      title="Inspect table records and columns"
                       style={{
-                        flex: 1,
                         background: colors.panelBg,
                         border: `1px solid ${colors.borderLight}`,
                         color: colors.text,
                         borderRadius: 4,
-                        padding: '5px 8px',
+                        padding: '5px 4px',
                         fontSize: 11,
                         fontWeight: 600,
                         cursor: 'pointer',
+                        textAlign: 'center',
                       }}
                     >
-                      👁️ Preview
+                      👁️ View
                     </button>
                     <button
                       onClick={() => handleExportCsv(item)}
+                      title="Download as CSV spreadsheet"
                       style={{
-                        flex: 1,
                         background: colors.panelBg,
                         border: `1px solid ${colors.borderLight}`,
                         color: colors.success,
                         borderRadius: 4,
-                        padding: '5px 8px',
+                        padding: '5px 4px',
                         fontSize: 11,
                         fontWeight: 600,
                         cursor: 'pointer',
+                        textAlign: 'center',
                       }}
                     >
                       💾 CSV
                     </button>
                     <button
-                      onClick={() => handleCopyJson(item)}
+                      onClick={() => handleExportJsonl(item)}
+                      title="Download as JSON Lines (JSONL)"
                       style={{
-                        flex: 1,
                         background: colors.panelBg,
                         border: `1px solid ${colors.borderLight}`,
-                        color: copiedName === item.name ? colors.success : colors.textMuted,
+                        color: colors.primaryLight,
                         borderRadius: 4,
-                        padding: '5px 8px',
+                        padding: '5px 4px',
                         fontSize: 11,
                         fontWeight: 600,
                         cursor: 'pointer',
+                        textAlign: 'center',
                       }}
                     >
-                      {copiedName === item.name ? '✓ Copied' : '📋 JSON'}
+                      📄 JSONL
+                    </button>
+                    <button
+                      onClick={() => handleCopyTypes(item)}
+                      title="Copy TypeScript interface"
+                      style={{
+                        background: colors.panelBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: copiedBadge === `${item.name}_ts` ? colors.success : colors.accent,
+                        borderRadius: 4,
+                        padding: '5px 4px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                      }}
+                    >
+                      {copiedBadge === `${item.name}_ts` ? '✓' : 'TS'}
+                    </button>
+                    <button
+                      onClick={() => handleJumpToSql(item)}
+                      title="Query with SQL in Workbench"
+                      style={{
+                        background: `${colors.primary}18`,
+                        border: `1px solid ${colors.primary}44`,
+                        color: colors.primaryLight,
+                        borderRadius: 4,
+                        padding: '5px 4px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                      }}
+                    >
+                      ⚡ SQL
                     </button>
                   </div>
                 </div>
@@ -693,6 +872,7 @@ export function SidePanelApp() {
         );
       })()}
 
+      {/* Scrape HTML Table */}
       <div style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape HTML Table</div>
@@ -703,41 +883,271 @@ export function SidePanelApp() {
         )}
       </div>
 
+      {/* Primary Transition Action to Full Workbench */}
       <div style={{ marginTop: 'auto', paddingTop: 10 }}>
-        <button onClick={handleOpenWorkbench} style={{ width: '100%', background: 'linear-gradient(135deg, #1e293b, #0f172a)', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '12px 14px', color: '#f8fafc', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}><span>Open Full SQL Workbench</span><span>↗</span></div>
-          <span style={{ fontSize: 10, color: colors.textDim }}>For multi-table joins, DuckDB SQL queries, and dataset lineage</span>
+        <button
+          onClick={handleOpenWorkbench}
+          style={{
+            width: '100%',
+            background: 'linear-gradient(135deg, #1e293b, #0f172a)',
+            border: `1px solid ${colors.border}`,
+            borderRadius: 8,
+            padding: '12px 14px',
+            color: '#f8fafc',
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 2,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>Open Full SQL Workbench</span>
+            <span>↗</span>
+          </div>
+          <span style={{ fontSize: 10, color: colors.textDim }}>
+            For multi-table joins, DuckDB SQL queries, and dataset lineage
+          </span>
         </button>
       </div>
 
+      {/* Rich Multi-Format Inspector Modal */}
       {previewItem && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', flexDirection: 'column', zIndex: 1000, padding: 12 }}>
-          <div style={{ background: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 10, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-            <div style={{ padding: '12px 14px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 1000,
+            padding: 12,
+          }}
+        >
+          <div
+            style={{
+              background: colors.cardBg,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ padding: '10px 14px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <strong style={{ fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>{previewItem.name}</strong>
-                <span style={{ fontSize: 11, color: colors.textDim, marginLeft: 8 }}>({previewItem.rowCount} rows)</span>
+                <strong style={{ fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>
+                  {previewItem.name}
+                </strong>
+                <span style={{ fontSize: 11, color: colors.textDim, marginLeft: 8 }}>
+                  ({previewItem.rowCount} rows)
+                </span>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => handleExportCsv(previewItem)} style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.success, borderRadius: 4, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>💾 CSV</button>
-                <button onClick={() => setPreviewItem(null)} style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.text, borderRadius: 4, padding: '4px 8px', fontSize: 11, cursor: 'pointer' }}>✕</button>
+                <button
+                  onClick={() => handleExportCsv(previewItem)}
+                  style={{
+                    background: colors.panelBg,
+                    border: `1px solid ${colors.borderLight}`,
+                    color: colors.success,
+                    borderRadius: 4,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  💾 CSV
+                </button>
+                <button
+                  onClick={() => handleExportJsonl(previewItem)}
+                  style={{
+                    background: colors.panelBg,
+                    border: `1px solid ${colors.borderLight}`,
+                    color: colors.primaryLight,
+                    borderRadius: 4,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  📄 JSONL
+                </button>
+                <button
+                  onClick={() => setPreviewItem(null)}
+                  style={{
+                    background: colors.panelBg,
+                    border: `1px solid ${colors.borderLight}`,
+                    color: colors.text,
+                    borderRadius: 4,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✕
+                </button>
               </div>
             </div>
+
+            {/* Modal Format Switcher Tabs */}
+            <div style={{ display: 'flex', borderBottom: `1px solid ${colors.borderLight}`, background: colors.panelBg, padding: '4px 8px', gap: 4 }}>
+              {(['table', 'typescript', 'schema', 'json'] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setPreviewTab(tab)}
+                  style={{
+                    background: previewTab === tab ? colors.cardBg : 'transparent',
+                    color: previewTab === tab ? colors.primaryLight : colors.textMuted,
+                    border: `1px solid ${previewTab === tab ? colors.borderLight : 'transparent'}`,
+                    borderRadius: 4,
+                    padding: '4px 8px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    textTransform: 'capitalize',
+                  }}
+                >
+                  {tab === 'table' ? '📊 Table' : tab === 'typescript' ? '📄 TypeScript' : tab === 'schema' ? '📋 JSON Schema' : '📦 Raw JSON'}
+                </button>
+              ))}
+            </div>
+
+            {/* Modal Content */}
             <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
-              {previewItem.rows.length > 0 ? (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: fonts.mono }}>
-                  <thead>
-                    <tr>{Object.keys(previewItem.rows[0]).map(h => <th key={h} style={{ background: colors.panelBg, padding: '6px 8px', border: `1px solid ${colors.border}`, textAlign: 'left', color: colors.textDim, position: 'sticky', top: 0, zIndex: 1 }}>{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {previewItem.rows.map((row, idx) => (
-                      <tr key={idx} style={{ background: idx % 2 === 0 ? 'transparent' : `${colors.panelBg}44` }}>
-                        {Object.keys(previewItem.rows[0]).map(h => <td key={h} style={{ padding: '5px 8px', border: `1px solid ${colors.borderLight}`, color: colors.text, whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{typeof row[h] === 'object' ? JSON.stringify(row[h]) : String(row[h] ?? '')}</td>)}
+              {previewTab === 'table' && (
+                previewItem.rows.length > 0 ? (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: fonts.mono }}>
+                    <thead>
+                      <tr>
+                        {Object.keys(previewItem.rows[0]).map(h => (
+                          <th
+                            key={h}
+                            style={{
+                              background: colors.panelBg,
+                              padding: '6px 8px',
+                              border: `1px solid ${colors.border}`,
+                              textAlign: 'left',
+                              color: colors.textDim,
+                              position: 'sticky',
+                              top: 0,
+                              zIndex: 1,
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : <div style={{ padding: 20, textAlign: 'center', color: colors.textDim, fontSize: 12 }}>No rows in this collection.</div>}
+                    </thead>
+                    <tbody>
+                      {previewItem.rows.map((row, idx) => (
+                        <tr key={idx} style={{ background: idx % 2 === 0 ? 'transparent' : `${colors.panelBg}44` }}>
+                          {Object.keys(previewItem.rows[0]).map(h => (
+                            <td
+                              key={h}
+                              style={{
+                                padding: '5px 8px',
+                                border: `1px solid ${colors.borderLight}`,
+                                color: colors.text,
+                                whiteSpace: 'nowrap',
+                                maxWidth: 160,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {typeof row[h] === 'object' ? JSON.stringify(row[h]) : String(row[h] ?? '')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ padding: 20, textAlign: 'center', color: colors.textDim, fontSize: 12 }}>
+                    No rows in this collection.
+                  </div>
+                )
+              )}
+
+              {previewTab === 'typescript' && (
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+                    <button
+                      onClick={() => handleCopyTypes(previewItem)}
+                      style={{
+                        background: colors.cardBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: copiedBadge === `${previewItem.name}_ts` ? colors.success : colors.primaryLight,
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {copiedBadge === `${previewItem.name}_ts` ? '✓ Copied Interface!' : '📋 Copy TypeScript'}
+                    </button>
+                  </div>
+                  <pre style={{ margin: 0, flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 6, padding: 10, fontSize: 11, fontFamily: fonts.mono, color: colors.primaryLight, overflow: 'auto' }}>
+                    {generateTypesFromRows(previewItem.name, previewItem.rows).tsInterface}
+                  </pre>
+                </div>
+              )}
+
+              {previewTab === 'schema' && (
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+                    <button
+                      onClick={() => handleCopySchema(previewItem)}
+                      style={{
+                        background: colors.cardBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: copiedBadge === `${previewItem.name}_schema` ? colors.success : colors.primaryLight,
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {copiedBadge === `${previewItem.name}_schema` ? '✓ Copied Schema!' : '📋 Copy JSON Schema'}
+                    </button>
+                  </div>
+                  <pre style={{ margin: 0, flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 6, padding: 10, fontSize: 11, fontFamily: fonts.mono, color: colors.accent, overflow: 'auto' }}>
+                    {generateTypesFromRows(previewItem.name, previewItem.rows).jsonSchema}
+                  </pre>
+                </div>
+              )}
+
+              {previewTab === 'json' && (
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+                    <button
+                      onClick={() => handleCopyJson(previewItem)}
+                      style={{
+                        background: colors.cardBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: copiedBadge === `${previewItem.name}_json` ? colors.success : colors.primaryLight,
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {copiedBadge === `${previewItem.name}_json` ? '✓ Copied JSON!' : '📋 Copy JSON'}
+                    </button>
+                  </div>
+                  <pre style={{ margin: 0, flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 6, padding: 10, fontSize: 11, fontFamily: fonts.mono, color: colors.text, overflow: 'auto' }}>
+                    {JSON.stringify(previewItem.rows, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -745,3 +1155,4 @@ export function SidePanelApp() {
     </div>
   );
 }
+
