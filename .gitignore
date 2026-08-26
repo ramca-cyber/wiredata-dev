@@ -38,3 +38,8 @@ Thumbs.db
 
 # Claude Code local tooling
 .claude/
+
+# Release bundles & build caches
+release/
+*.tsbuildinfo
+
