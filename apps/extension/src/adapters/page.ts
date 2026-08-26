@@ -54,7 +54,12 @@ export class PageNetworkCaptureAdapter {
     chrome.runtime.onMessage.addListener(this.messageListener);
 
     // Send start signal to service worker and require confirmation
-    const origin = new URL(this.tabUrl).origin;
+    let origin = '*';
+    if (this.tabUrl) {
+      try {
+        origin = new URL(this.tabUrl).origin;
+      } catch {}
+    }
     const response = await chrome.runtime.sendMessage({
       type: 'START_TAB_CAPTURE',
       tabId: this.tabId,

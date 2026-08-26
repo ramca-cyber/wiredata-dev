@@ -242,9 +242,10 @@ async function stopCaptureForTab(tabId: number): Promise<void> {
 chrome.action.onClicked.addListener(async tab => {
   if (tab.id) {
     try {
+      const urlParam = tab.url ? `?tabId=${tab.id}&tabUrl=${encodeURIComponent(tab.url)}` : `?tabId=${tab.id}`;
       await chrome.sidePanel.setOptions({
         tabId: tab.id,
-        path: 'sidepanel.html',
+        path: `sidepanel.html${urlParam}`,
         enabled: true,
       });
       await chrome.sidePanel.open({ tabId: tab.id });

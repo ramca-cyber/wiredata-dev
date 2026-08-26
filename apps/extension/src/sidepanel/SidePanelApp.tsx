@@ -76,16 +76,36 @@ export function SidePanelApp() {
   // 1. Detect current active tab, initialize/reconcile workspace and session state
   useEffect(() => {
     const init = async () => {
-      // Query active tab
+      // 0. Parse query params if opened from action click
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const pId = params.get('tabId');
+        const pUrl = params.get('tabUrl');
+        if (pId) {
+          setActiveTab({
+            id: Number(pId),
+            url: pUrl ? decodeURIComponent(pUrl) : '',
+            title: '',
+          });
+        }
+      } catch {}
+
+      // 1. Query active tab (check lastFocusedWindow, then currentWindow, then any active tab)
       if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
         try {
-          const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (tabs[0]) {
-            setActiveTab({
-              id: tabs[0].id,
-              url: tabs[0].url || '',
-              title: tabs[0].title || '',
-            });
+          let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          if (!tabs[0]) {
+            tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          }
+          if (!tabs[0]) {
+            tabs = await chrome.tabs.query({ active: true });
+          }
+          if (tabs[0]?.id) {
+            setActiveTab(prev => ({
+              id: tabs[0].id ?? prev?.id,
+              url: tabs[0].url || tabs[0].pendingUrl || prev?.url || '',
+              title: tabs[0].title || prev?.title || '',
+            }));
           }
         } catch (err) {
           console.warn('Tab query error:', err);
@@ -174,21 +194,24 @@ export function SidePanelApp() {
       chrome.runtime.onMessage.addListener(listener);
     }
 
-    // Listen for tab switching to keep active target tab updated
-    const handleTabActivated = async (activeInfo: chrome.tabs.TabActiveInfo) => {
-      try {
-        const tab = await chrome.tabs.get(activeInfo.tabId);
-        if (tab) {
-          setActiveTab({
-            id: tab.id,
-            url: tab.url || '',
-            title: tab.title || '',
-          });
-        }
-      } catch {}
+    // Listen for tab switch events
+    const tabActivatedListener = async (activeInfo: { tabId: number; windowId: number }) => {
+      if (typeof chrome !== 'undefined' && chrome.tabs?.get) {
+        try {
+          const tab = await chrome.tabs.get(activeInfo.tabId);
+          if (tab?.id) {
+            setActiveTab({
+              id: tab.id,
+              url: tab.url || tab.pendingUrl || '',
+              title: tab.title || '',
+            });
+          }
+        } catch {}
+      }
     };
+
     if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
-      chrome.tabs.onActivated.addListener(handleTabActivated);
+      chrome.tabs.onActivated.addListener(tabActivatedListener);
     }
 
     return () => {
@@ -196,7 +219,7 @@ export function SidePanelApp() {
         chrome.runtime.onMessage.removeListener(listener);
       }
       if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
-        chrome.tabs.onActivated.removeListener(handleTabActivated);
+        chrome.tabs.onActivated.removeListener(tabActivatedListener);
       }
     };
   }, []);
@@ -242,24 +265,54 @@ export function SidePanelApp() {
       }
     } else {
       // Start
-      if (
-        !activeTab?.id ||
-        !activeTab.url ||
-        activeTab.url.startsWith('chrome://') ||
-        activeTab.url.startsWith('chrome-extension://') ||
-        activeTab.url.startsWith('edge://') ||
-        activeTab.url.startsWith('about:')
-      ) {
-        setStartError('Please open a normal web page and click the WireData toolbar icon (W) to start capture.');
+      let targetTab = activeTab;
+      if (!targetTab?.id && typeof chrome !== 'undefined' && chrome.tabs?.query) {
+        try {
+          let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          if (!tabs[0]) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tabs[0]) tabs = await chrome.tabs.query({ active: true });
+          if (tabs[0]?.id) {
+            targetTab = {
+              id: tabs[0].id,
+              url: tabs[0].url || tabs[0].pendingUrl || '',
+              title: tabs[0].title || '',
+            };
+            setActiveTab(targetTab);
+          }
+        } catch {}
+      }
+
+      if (!targetTab?.id) {
+        setStartError('Please select an active web page tab to capture.');
         return;
+      }
+
+      if (
+        targetTab.url &&
+        (targetTab.url.startsWith('chrome://') ||
+          targetTab.url.startsWith('chrome-extension://') ||
+          targetTab.url.startsWith('edge://') ||
+          targetTab.url.startsWith('about:'))
+      ) {
+        setStartError('Cannot capture browser internal pages. Please navigate to a normal web page.');
+        return;
+      }
+
+      let hostNameClean = 'Active Web Tab';
+      if (targetTab.url) {
+        try {
+          hostNameClean = new URL(targetTab.url).hostname || targetTab.url;
+        } catch {
+          hostNameClean = targetTab.url;
+        }
       }
 
       const sessionId = generateULID();
       const session: CaptureSession = {
         session_id: sessionId,
-        name: `Page Capture: ${new URL(activeTab.url).hostname}`,
+        name: `Page Capture: ${hostNameClean}`,
         started_at: new Date().toISOString(),
-        initial_page_url: redactQueryParams(activeTab.url).sanitizedUrl,
+        initial_page_url: targetTab.url ? redactQueryParams(targetTab.url).sanitizedUrl : '',
         navigation_history: [],
         capture_count: 0,
         body_bytes: 0,
@@ -269,8 +322,8 @@ export function SidePanelApp() {
 
       const adapter = new PageNetworkCaptureAdapter(
         sessionId,
-        activeTab.id,
-        activeTab.url,
+        targetTab.id,
+        targetTab.url || '',
         attachCaptureCallback(sessionId, workspaceManager)
       );
 
@@ -516,21 +569,16 @@ export function SidePanelApp() {
 
         <button
           onClick={handleToggleCapture}
-          disabled={!isCapturing && isRestrictedPage}
           style={{
-            background: isCapturing
-              ? colors.error
-              : isRestrictedPage
-                ? colors.cardBg
-                : 'linear-gradient(135deg, #0284c7, #2563eb)',
-            color: isRestrictedPage && !isCapturing ? colors.textDim : '#ffffff',
-            border: isRestrictedPage && !isCapturing ? `1px solid ${colors.border}` : 'none',
+            background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
+            color: '#ffffff',
+            border: 'none',
             borderRadius: 6,
             padding: '10px 16px',
             fontSize: 13,
             fontWeight: 600,
-            cursor: isRestrictedPage && !isCapturing ? 'not-allowed' : 'pointer',
-            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : isRestrictedPage ? 'none' : '0 4px 12px rgba(2, 132, 199, 0.3)',
+            cursor: 'pointer',
+            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
           }}
         >
           {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
