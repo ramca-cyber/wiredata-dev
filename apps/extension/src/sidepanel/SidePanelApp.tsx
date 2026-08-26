@@ -23,7 +23,7 @@ import { PageNetworkCaptureAdapter } from '../adapters/page.js';
 import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
 export function SidePanelApp() {
-  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.4';
+  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.5';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
@@ -47,6 +47,7 @@ export function SidePanelApp() {
   const [hasPersistentWorkspace, setHasPersistentWorkspace] = useState<boolean>(false);
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
+  const pendingWritesRef = useRef<Set<Promise<unknown>>>(new Set());
 
   const attachCaptureCallback = (sessionId: ULID, wm: WorkspaceManager) => (
     capture: CapturedRequest,
@@ -65,7 +66,11 @@ export function SidePanelApp() {
       });
     }
 
-    wm.saveCapture(sessionId, capture, rawBody);
+    const writePromise = wm.saveCapture(sessionId, capture, rawBody)
+      .finally(() => {
+        pendingWritesRef.current.delete(writePromise);
+      });
+    pendingWritesRef.current.add(writePromise);
   };
 
   // 1. Detect current active tab, initialize/reconcile workspace and session state
@@ -220,6 +225,10 @@ export function SidePanelApp() {
       if (adapterRef.current) {
         await adapterRef.current.stop();
         adapterRef.current = null;
+      }
+      // Await any pending capture writes to eliminate storage race before Workbench opens
+      if (pendingWritesRef.current.size > 0) {
+        await Promise.allSettled(Array.from(pendingWritesRef.current));
       }
       setIsCapturing(false);
       if (activeSession) {

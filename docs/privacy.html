@@ -208,12 +208,12 @@
   </section>
 
   <section>
-    <h2>4. Data Retention and Storage</h2>
-    <p>WireData provides three clearly defined storage layers, all local to your device:</p>
+    <h2>4. Data Retention and Storage Architecture</h2>
+    <p>WireData provides two local storage mechanisms plus ephemeral session state, all strictly confined to your device:</p>
     <ul>
-      <li><strong>Ephemeral Session State:</strong> Active capture flags and tab IDs are held in <code>chrome.storage.session</code>. This data is automatically wiped when your browser closes or the extension reloads.</li>
-      <li><strong>In-Memory Working Session:</strong> If no folder is selected, captures and extracted datasets reside solely in browser memory (RAM) and are discarded when the extension page is closed.</li>
-      <li><strong>User-Selected Local Folder:</strong> If you explicitly choose a workspace directory via the File System Access API, captures, schema definitions, and DuckDB snapshots are saved to that folder on your local drive. This data remains on your computer until you delete it.</li>
+      <li><strong>Ephemeral Session State:</strong> Active capture flags and inspected tab identifiers are stored in <code>chrome.storage.session</code>. This transient control state is automatically wiped when your browser closes or the extension unloads.</li>
+      <li><strong>Browser-Local Workspace (Default):</strong> By default, captures, extracted datasets, and metadata are saved locally in browser <code>IndexedDB</code> storage under the extension origin. This allows the Side Panel, Workbench, and DevTools to seamlessly share the same local workspace. The data remains strictly on your device until you clear it via the Workbench, clear extension storage, or uninstall the extension.</li>
+      <li><strong>User-Selected Local Folder (Optional):</strong> If you explicitly choose a workspace directory via the File System Access API, captured JSON files, schema definitions, and DuckDB snapshots are saved directly to that local folder on your disk. This data remains on your computer under your full filesystem control until you delete it.</li>
     </ul>
   </section>
 
