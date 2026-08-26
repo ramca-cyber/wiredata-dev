@@ -9,9 +9,169 @@
  * is lost the moment the worker is terminated and restarted, silently dropping any
  * capture that arrives afterward. Plain runtime messages have no such dependency —
  * if nothing is listening, the send simply fails and is ignored.
+ *
+ * NOTE: installPageCaptureHook and uninstallPageCaptureHook are NOT imported.
+ * They are defined here as standalone functions and passed directly to
+ * chrome.scripting.executeScript({ func }), which serializes them via
+ * Function.prototype.toString() and re-evaluates them in the target page's
+ * MAIN world. They must be fully self-contained — no closures, no imports.
  */
 
-import { installPageCaptureHook, uninstallPageCaptureHook } from '../capture/hooks/main-world-hooks.js';
+/**
+ * MAIN-World fetch + XHR hook — serialized and injected into the page's JS context.
+ * Must be 100% self-contained: no imports, no closures over anything outside this function.
+ */
+function installPageCaptureHook(sessionId: string, tabId: number): void {
+  const FETCH_SENTINEL = '__WIREDATA_FETCH_WRAPPER__';
+  const XHR_SENTINEL = '__WIREDATA_XHR_WRAPPER__';
+
+  function isJsonMime(mime: string | null): boolean {
+    if (!mime) return false;
+    const lower = mime.toLowerCase();
+    return (
+      lower.includes('application/json') ||
+      lower.includes('application/problem+json') ||
+      lower.includes('+json') ||
+      lower.includes('text/json')
+    );
+  }
+
+  function sanitizeUrl(rawUrl: string): string {
+    try {
+      const parsed = new URL(rawUrl, window.location.origin);
+      const SENSITIVE_PARAMS = ['token', 'auth', 'key', 'secret', 'password', 'apikey', 'api_key', 'access_token'];
+      parsed.searchParams.forEach((_val: string, key: string) => {
+        if (SENSITIVE_PARAMS.some(p => key.toLowerCase().includes(p))) {
+          parsed.searchParams.set(key, '[REDACTED]');
+        }
+      });
+      return parsed.toString();
+    } catch {
+      return rawUrl;
+    }
+  }
+
+  function extractGraphQLOperation(body: unknown): string | undefined {
+    if (!body) return undefined;
+    if (typeof body === 'string') {
+      try { return (JSON.parse(body) as any).operationName || undefined; } catch { return undefined; }
+    }
+    if (typeof body === 'object' && body !== null) {
+      return (body as any).operationName || undefined;
+    }
+    return undefined;
+  }
+
+  const w = window as any;
+  if (w.__WIREDATA_HOOK_STATE__) {
+    w.__WIREDATA_HOOK_STATE__.sessionId = sessionId;
+    w.__WIREDATA_HOOK_STATE__.tabId = tabId;
+    return;
+  }
+
+  const state = {
+    originalFetch: window.fetch,
+    originalXhrOpen: XMLHttpRequest.prototype.open,
+    originalXhrSend: XMLHttpRequest.prototype.send,
+    sessionId,
+    tabId,
+  };
+  w.__WIREDATA_HOOK_STATE__ = state;
+
+  // 1. Hook window.fetch
+  const nativeFetch = window.fetch;
+  const wrappedFetch = async function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    const startedAt = new Date().toISOString();
+    const startTime = performance.now();
+    const method = ((init?.method) || (typeof input === 'object' && 'method' in input ? (input as Request).method : 'GET')).toUpperCase();
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
+    const sanitized = sanitizeUrl(rawUrl);
+    const sanitizedPageUrl = sanitizeUrl(window.location.href);
+    const graphqlOp = extractGraphQLOperation(init?.body);
+
+    const response = await nativeFetch.apply(this, [input, init] as Parameters<typeof fetch>);
+
+    try {
+      const contentType = response.headers.get('content-type');
+      if (isJsonMime(contentType)) {
+        response.clone().json().then((jsonBody: unknown) => {
+          const durationMs = Math.round(performance.now() - startTime);
+          window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+            sessionId: state.sessionId, tabId: state.tabId, method,
+            url: sanitized, sanitized_url: sanitized, pageUrl: sanitizedPageUrl,
+            status: response.status, statusText: response.statusText,
+            mimeType: contentType || 'application/json', graphqlOperationName: graphqlOp,
+            body: jsonBody, startedAt, completedAt: new Date().toISOString(), durationMs,
+          }}, '*');
+        }).catch(() => {});
+      }
+    } catch {}
+
+    return response;
+  };
+  (wrappedFetch as any)[FETCH_SENTINEL] = true;
+  window.fetch = wrappedFetch as typeof fetch;
+
+  // 2. Hook XMLHttpRequest
+  const nativeXhrOpen = XMLHttpRequest.prototype.open;
+  const nativeXhrSend = XMLHttpRequest.prototype.send;
+  const XHR_KEY = '__wiredata_xhr_data__';
+
+  XMLHttpRequest.prototype.open = function (this: any, method: string, url: string | URL, ...rest: any[]) {
+    const rawUrl = typeof url === 'string' ? url : url.toString();
+    this[XHR_KEY] = { method: method.toUpperCase(), rawUrl, sanitizedUrl: sanitizeUrl(rawUrl), startedAt: new Date().toISOString(), startTime: performance.now() };
+    return nativeXhrOpen.apply(this, [method, url, ...rest] as any);
+  };
+  (XMLHttpRequest.prototype.open as any)[XHR_SENTINEL] = true;
+
+  XMLHttpRequest.prototype.send = function (this: any, body?: Document | XMLHttpRequestBodyInit | null) {
+    const data = this[XHR_KEY];
+    if (data) {
+      data.graphqlOp = extractGraphQLOperation(body);
+      this.addEventListener('load', function (this: XMLHttpRequest) {
+        try {
+          const contentType = this.getResponseHeader('content-type');
+          if (isJsonMime(contentType)) {
+            const jsonBody = this.responseType === 'json' ? this.response
+              : this.responseText ? JSON.parse(this.responseText) : undefined;
+            if (jsonBody !== undefined) {
+              const durationMs = Math.round(performance.now() - data.startTime);
+              window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+                sessionId: state.sessionId, tabId: state.tabId, method: data.method,
+                url: data.sanitizedUrl, sanitized_url: data.sanitizedUrl,
+                pageUrl: sanitizeUrl(window.location.href),
+                status: this.status, statusText: this.statusText,
+                mimeType: contentType || 'application/json', graphqlOperationName: data.graphqlOp,
+                body: jsonBody, startedAt: data.startedAt, completedAt: new Date().toISOString(), durationMs,
+              }}, '*');
+            }
+          }
+        } catch {}
+      });
+    }
+    return nativeXhrSend.apply(this, [body] as any);
+  };
+  (XMLHttpRequest.prototype.send as any)[XHR_SENTINEL] = true;
+}
+
+/** Reverses fetch and XHR hooks — must also be fully self-contained. */
+function uninstallPageCaptureHook(): void {
+  const FETCH_SENTINEL = '__WIREDATA_FETCH_WRAPPER__';
+  const XHR_SENTINEL = '__WIREDATA_XHR_WRAPPER__';
+  const w = window as any;
+  const state = w.__WIREDATA_HOOK_STATE__;
+  if (!state) return;
+  if (window.fetch && (window.fetch as any)[FETCH_SENTINEL] === true && state.originalFetch) {
+    window.fetch = state.originalFetch;
+  }
+  if (XMLHttpRequest.prototype.open && (XMLHttpRequest.prototype.open as any)[XHR_SENTINEL] === true && state.originalXhrOpen) {
+    XMLHttpRequest.prototype.open = state.originalXhrOpen;
+  }
+  if (XMLHttpRequest.prototype.send && (XMLHttpRequest.prototype.send as any)[XHR_SENTINEL] === true && state.originalXhrSend) {
+    XMLHttpRequest.prototype.send = state.originalXhrSend;
+  }
+  delete w.__WIREDATA_HOOK_STATE__;
+}
 
 interface EphemeralSession {
   activeTabId: number | null;
