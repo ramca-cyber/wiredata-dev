@@ -76,6 +76,9 @@ if (manifestEntry) {
     if (manifest.version !== version) {
       errors.push(`manifest version (${manifest.version}) does not match package.json (${version})`);
     }
+    if (manifest.description && manifest.description.length > 132) {
+      errors.push(`manifest description length (${manifest.description.length}) exceeds Chrome Web Store limit of 132 chars`);
+    }
     if (manifest.permissions?.includes('unlimitedStorage')) {
       errors.push(`manifest.json still contains unnecessary unlimitedStorage permission`);
     }

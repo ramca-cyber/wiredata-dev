@@ -3,7 +3,7 @@
   "minimum_chrome_version": "142",
   "name": "WireData - Network Data Workbench",
   "version": "0.1.5",
-  "description": "Capture structured data from the current tab at your request—JSON API responses or visible tables—then inspect, query, and export it locally with SQL.",
+  "description": "Capture JSON API responses and page tables from your active tab, then query and export them locally using client-side SQL.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
