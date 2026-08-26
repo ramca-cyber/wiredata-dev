@@ -12,6 +12,7 @@ import {
   computeNormalizedRoute,
   detectCandidateCollections,
   generateULID,
+  redactQueryParams,
   sha256,
   ULID,
 } from '@wiredata/core';
@@ -62,15 +63,19 @@ export async function captureTableFromActiveTab(
   const body = { rows: rowObjects };
   const bodyStr = JSON.stringify(body);
   const bodyHash = await sha256(bodyStr);
-  const normalizedRoute = computeNormalizedRoute('GET', result.sourceUrl);
+  // Sanitize the source URL — query params may contain credentials or tokens
+  // (e.g. access_token=...). Pass through the same redactQueryParams logic used
+  // by all other capture adapters before storing anything.
+  const { sanitizedUrl } = redactQueryParams(result.sourceUrl);
+  const normalizedRoute = computeNormalizedRoute('GET', sanitizedUrl);
 
   const capture: CapturedRequest = {
     capture_id: generateULID(),
     session_id: sessionId,
     capture_mode: 'dom',
     request: {
-      url: result.sourceUrl,
-      sanitized_url: result.sourceUrl,
+      url: sanitizedUrl,
+      sanitized_url: sanitizedUrl,
       route_template: normalizedRoute,
       method: 'GET',
       query_parameters: [],

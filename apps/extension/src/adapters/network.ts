@@ -1,6 +1,16 @@
 /**
  * Chrome DevTools Network Adapter
- * Intercepts network entries, extracts JSON bodies, performs redaction and candidate detection
+ * Intercepts network entries, extracts JSON bodies, performs redaction and candidate detection.
+ *
+ * Capture contract (deliberately minimal — matches page-capture mode):
+ *   - Sanitized request URL (credential-shaped query params redacted)
+ *   - HTTP method, status code, MIME type, timing
+ *   - GraphQL operation name (if applicable)
+ *   - Parsed JSON response body only
+ *
+ * Intentionally NOT persisted: request/response headers, request bodies,
+ * non-JSON responses. This keeps the privacy surface identical to page-capture
+ * mode and simplifies the disclosure: "JSON API responses and request URLs."
  */
 
 import {
@@ -10,8 +20,6 @@ import {
   detectSensitiveJsonPaths,
   extractGraphQLOperation,
   generateULID,
-  redactHeaders,
-  redactJsonBody,
   redactQueryParams,
   sha256,
   ULID,
@@ -53,60 +61,15 @@ export class ChromeNetworkCaptureAdapter {
     const mimeType = response?.content?.mimeType || '';
     const isJsonMime = /json/i.test(mimeType);
 
-    // Redaction
-    const rawHeaders = (request.headers || []).map((h: any) => ({ name: h.name, value: h.value }));
-    const respHeaders = (response.headers || []).map((h: any) => ({ name: h.name, value: h.value }));
-    const sanitizedHeaders = redactHeaders(rawHeaders);
-    const sanitizedRespHeaders = redactHeaders(respHeaders);
-    const { sanitizedUrl, params } = redactQueryParams(request.url || '');
+    // Only capture JSON responses — keeps privacy surface minimal and matches
+    // the page-capture adapter's behavior exactly.
+    if (!isJsonMime) return;
 
-    // GraphQL operation extraction
+    const { sanitizedUrl, params } = redactQueryParams(request.url || '');
     const rawReqBody = request.postData?.text;
-    const sanitizedReqBody = rawReqBody ? String(redactJsonBody(rawReqBody)) : undefined;
     const graphqlOp = rawReqBody ? extractGraphQLOperation(rawReqBody) : undefined;
     const normalizedRoute = computeNormalizedRoute(request.method || 'GET', sanitizedUrl, graphqlOp);
-
     const captureId = generateULID();
-
-    if (!isJsonMime) {
-      // Non-JSON request
-      const capture: CapturedRequest = {
-        capture_id: captureId,
-        session_id: this.sessionId,
-        capture_mode: 'devtools',
-        request: {
-          url: sanitizedUrl,
-          sanitized_url: sanitizedUrl,
-          route_template: normalizedRoute,
-          method: request.method || 'GET',
-          query_parameters: params,
-          headers: sanitizedHeaders,
-          body_sanitized: sanitizedReqBody,
-          graphql_operation_name: graphqlOp,
-        },
-        response: {
-          status: response.status,
-          status_text: response.statusText,
-          mime_type: mimeType,
-          headers: sanitizedRespHeaders,
-          body_size: response.bodySize || 0,
-          body_hash: '',
-          body_object_ref: '',
-        },
-        timing: {
-          started_at: new Date(Date.now() - (time || 0)).toISOString(),
-          completed_at: new Date().toISOString(),
-          duration_ms: Math.round(time || 0),
-        },
-        classification: {
-          json_candidate: false,
-          parse_status: 'unsupported_mime',
-        },
-      };
-
-      this.onCapture(capture);
-      return;
-    }
 
     // Retrieve JSON response body
     harEntry.getContent(async (content: string, encoding: string) => {
@@ -120,11 +83,8 @@ export class ChromeNetworkCaptureAdapter {
       } else {
         try {
           const decoded = encoding === 'base64' ? atob(content) : content;
-          // Hash the exact bytes as received — the response body itself is
-          // stored unmodified, so the hash must address exactly what's stored.
           bodyHash = await sha256(decoded);
 
-          // Check size threshold (25 MiB default limit)
           if (decoded.length > 25 * 1024 * 1024) {
             parseStatus = 'skipped_large';
           } else {
@@ -146,15 +106,12 @@ export class ChromeNetworkCaptureAdapter {
           route_template: normalizedRoute,
           method: request.method || 'GET',
           query_parameters: params,
-          headers: sanitizedHeaders,
-          body_sanitized: sanitizedReqBody,
           graphql_operation_name: graphqlOp,
         },
         response: {
           status: response.status,
           status_text: response.statusText,
           mime_type: mimeType,
-          headers: sanitizedRespHeaders,
           body_size: response.bodySize || content?.length || 0,
           body_hash: bodyHash,
           body_object_ref: bodyHash,

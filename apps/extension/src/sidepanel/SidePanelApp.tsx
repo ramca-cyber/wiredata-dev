@@ -23,6 +23,7 @@ import { PageNetworkCaptureAdapter } from '../adapters/page.js';
 import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
 export function SidePanelApp() {
+  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.4';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
@@ -232,7 +233,7 @@ export function SidePanelApp() {
         navigation_history: [],
         capture_count: 0,
         body_bytes: 0,
-        application_version: '0.1.0',
+        application_version: appVersion,
         status: 'capturing',
       };
 
@@ -288,7 +289,7 @@ export function SidePanelApp() {
           navigation_history: [],
           capture_count: 0,
           body_bytes: 0,
-          application_version: '0.1.0',
+          application_version: appVersion,
           status: 'new',
         };
         setActiveSession(session);
@@ -382,7 +383,7 @@ export function SidePanelApp() {
           </div>
           <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.02em' }}>WireData</span>
         </div>
-        <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>v0.1.0</span>
+        <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>v{appVersion}</span>
       </div>
 
       {/* Target Tab Host Card */}
@@ -433,8 +434,8 @@ export function SidePanelApp() {
 
         <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
           {isCapturing
-            ? 'Recording JSON fetch & XHR responses requested by this page. Request headers and credentials are never collected.'
-            : 'Capture is off. WireData is not recording network data from this tab.'}
+            ? 'Recording JSON fetch & XHR responses from this tab. Request auth headers and credential URL parameters are redacted. All processing stays strictly local.'
+            : 'Capture is off. When started, WireData will read JSON API responses and request URLs from this tab. Data is processed locally on your device and never sent to external servers.'}
         </p>
 
         {isCapturing && (
@@ -501,9 +502,8 @@ export function SidePanelApp() {
       >
         <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape Table on Page</div>
         <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
-          Grabs whatever HTML table or grid is visible on this page right now — a one-time snapshot, not a live
-          recording. Rows are captured exactly as displayed; large virtualized grids that don't respond to
-          programmatic scrolling may only capture what's currently rendered.
+          Takes a one-time snapshot of the visible HTML table or grid on this page. Page URLs are sanitized.
+          Data is processed and stored locally on your device.
         </p>
 
         {scrapeStatus && (

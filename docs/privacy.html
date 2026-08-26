@@ -36,24 +36,30 @@
       padding: 48px 24px 80px;
     }
     .updated {
-      font-size: 0.8rem; color: #475569;
-      margin-bottom: 40px;
-      padding: 10px 16px;
+      font-size: 0.82rem; color: #94a3b8;
+      margin-bottom: 32px;
+      padding: 12px 18px;
       background: #1e293b;
       border-radius: 6px;
-      border-left: 3px solid #0284c7;
+      border-left: 4px solid #0284c7;
     }
     section { margin-bottom: 36px; }
     h2 {
-      font-size: 1.1rem; font-weight: 600;
+      font-size: 1.15rem; font-weight: 600;
       color: #f1f5f9;
       margin-bottom: 12px;
       padding-bottom: 8px;
       border-bottom: 1px solid #1e293b;
     }
+    h3 {
+      font-size: 0.98rem; font-weight: 600;
+      color: #38bdf8;
+      margin: 16px 0 8px;
+    }
     p { margin-bottom: 12px; color: #94a3b8; }
     ul { padding-left: 20px; margin-bottom: 12px; }
     li { margin-bottom: 6px; color: #94a3b8; }
+    strong { color: #e2e8f0; }
     .highlight {
       background: #1e293b;
       border: 1px solid #334155;
@@ -71,12 +77,31 @@
       font-size: 0.78rem;
       font-weight: 600;
       padding: 2px 8px;
-      margin: 2px 2px 2px 0;
+      margin: 2px 4px 2px 0;
     }
     .badge.green { background: rgba(34,197,94,0.12); color: #4ade80; border-color: rgba(34,197,94,0.3); }
     .badge.purple { background: rgba(139,92,246,0.12); color: #a78bfa; border-color: rgba(139,92,246,0.3); }
     a { color: #38bdf8; text-decoration: none; }
     a:hover { text-decoration: underline; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 0.88rem;
+    }
+    th, td {
+      border: 1px solid #334155;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    th {
+      background: #1e293b;
+      color: #f1f5f9;
+    }
+    td {
+      background: #0f1116;
+      color: #94a3b8;
+    }
     footer {
       text-align: center;
       padding: 32px;
@@ -97,126 +122,143 @@
 </header>
 
 <main>
-  <div class="updated">Last updated: August 2026 &nbsp;·&nbsp; Version 0.1.0</div>
+  <div class="updated">
+    <strong>Last updated:</strong> August 2026 &nbsp;·&nbsp; <strong>Version:</strong> 0.1.4
+  </div>
 
   <div class="highlight">
-    <strong>Summary:</strong> WireData is a <strong>local-first, zero-telemetry developer tool</strong>.
-    All captured data stays in your browser and local filesystem.
-    WireData collects no personal information about you, transmits nothing to external servers,
-    and has no analytics, tracking, or advertising of any kind.
+    <strong>Core Privacy Commitment:</strong> WireData processes and stores data <strong>entirely locally on your device</strong> at your explicit direction.
+    The developer of WireData <strong>does not receive, collect, or transmit</strong> any captured website content, network data, browsing history, or analytics to external servers.
     <br><br>
-    <span class="badge green">Zero Telemetry</span>
-    <span class="badge">Local-First</span>
-    <span class="badge purple">No External Servers</span>
-    <span class="badge">No Ads</span>
-    <span class="badge green">Open Source</span>
+    <span class="badge green">Local Processing Only</span>
+    <span class="badge">Zero Remote Servers</span>
+    <span class="badge green">Zero Telemetry & Tracking</span>
+    <span class="badge purple">User-Controlled Storage</span>
+    <span class="badge">Open Source</span>
   </div>
 
   <section>
-    <h2>1. What WireData Does</h2>
+    <h2>1. Overview and Purpose</h2>
     <p>
-      WireData is a Chrome developer tool that helps software developers and data analysts inspect,
-      capture, and query structured JSON network traffic from web applications they are actively debugging.
+      WireData is a local-first developer productivity extension designed to inspect, capture, and query structured JSON network data and tables from web applications you are authorized to inspect.
     </p>
     <p>
-      When you explicitly click <strong>Start Capture</strong>, WireData temporarily monitors HTTP/HTTPS
-      fetch and XMLHttpRequest responses on the active browser tab and records structured JSON response bodies
-      into an in-memory or local-filesystem workspace.
+      Capture never runs automatically. Data handling only begins when you click an explicit action (such as <strong>Start Capture</strong> or <strong>Scrape Table</strong>) on an active browser tab.
     </p>
   </section>
 
   <section>
-    <h2>2. Data We Collect About You</h2>
-    <p><strong>We collect nothing about you.</strong> Specifically:</p>
+    <h2>2. User Data Handled by WireData</h2>
+    <p>
+      Under Chrome Web Store policies, data processed from web requests or pages you inspect is categorized as user data. The following outlines exactly what WireData handles locally:
+    </p>
+
+    <h3>A. Website Content & API Responses</h3>
     <ul>
-      <li>No name, email address, or account information</li>
-      <li>No usage analytics or telemetry</li>
-      <li>No crash reports sent to external servers</li>
-      <li>No advertising identifiers</li>
-      <li>No browser history beyond the active tab session you explicitly start</li>
+      <li><strong>JSON API Responses:</strong> Intercepted HTTP/HTTPS <code>fetch</code> and <code>XMLHttpRequest</code> JSON response payloads from the inspected tab during active capture sessions.</li>
+      <li><strong>DOM Table / Grid Data:</strong> Cell text extracted from HTML table or grid elements during one-time table scraping.</li>
+      <li><strong>Sensitive Information Note:</strong> Captured response payloads are stored unmodified to preserve schema provenance. They may contain personal or sensitive information returned by the web service being inspected. All processing and storage remain strictly on your local machine.</li>
+    </ul>
+
+    <h3>B. Web Browsing Activity & URLs</h3>
+    <ul>
+      <li><strong>Request & Page URLs:</strong> Request endpoint URLs and target page URLs are recorded during capture.</li>
+      <li><strong>Automatic URL Sanitization:</strong> Query parameters containing credential-shaped names (such as <code>token</code>, <code>auth</code>, <code>key</code>, <code>secret</code>, <code>password</code>, <code>apikey</code>, <code>access_token</code>) are automatically redacted before storage (e.g., replaced with <code>[REDACTED]</code>).</li>
+    </ul>
+
+    <h3>C. Authentication & Request Credentials</h3>
+    <ul>
+      <li><strong>Request Authentication Headers:</strong> Headers such as <code>Authorization</code>, <code>Cookie</code>, and custom session tokens are <strong>never stored</strong>.</li>
+      <li><strong>Request Bodies:</strong> HTTP request payloads are not collected in standard capture mode.</li>
     </ul>
   </section>
 
   <section>
-    <h2>3. Network Request Data Captured at Your Direction</h2>
-    <p>
-      When you start a capture session, WireData intercepts JSON API responses from the active tab
-      you are inspecting. This captured data:
-    </p>
+    <h2>3. Capture Modes and Lifecycle</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Capture Mode</th>
+          <th>Trigger</th>
+          <th>What Is Handled Locally</th>
+          <th>Stop Conditions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Side Panel Network Capture</strong></td>
+          <td>Click "Start Capture" in Side Panel</td>
+          <td>JSON fetch/XHR responses, HTTP method, status, timing, sanitized URLs</td>
+          <td>Click "Stop Capture", close side panel, close tab, or cross-origin navigation</td>
+        </tr>
+        <tr>
+          <td><strong>DevTools Deep Capture</strong></td>
+          <td>Start Capture in DevTools panel</td>
+          <td>JSON network entries, GraphQL operation names, timing, sanitized URLs</td>
+          <td>Click Stop, close DevTools, or close tab</td>
+        </tr>
+        <tr>
+          <td><strong>DOM Table Scrape</strong></td>
+          <td>Click "Scrape Table" in Side Panel</td>
+          <td>Snapshot of visible HTML table/grid rows and sanitized page URL</td>
+          <td>One-time snapshot (instantaneous)</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. Data Retention and Storage</h2>
+    <p>WireData provides three clearly defined storage layers, all local to your device:</p>
     <ul>
-      <li><strong>Stays entirely in your browser</strong> (chrome.storage or local filesystem via the File System Access API)</li>
-      <li>Is <strong>never transmitted</strong> to WireData's servers or any third party</li>
-      <li>Is <strong>only accessible to you</strong> within the WireData workbench UI</li>
-      <li>Is <strong>automatically cleared</strong> when you close the capture session or restart the browser</li>
+      <li><strong>Ephemeral Session State:</strong> Active capture flags and tab IDs are held in <code>chrome.storage.session</code>. This data is automatically wiped when your browser closes or the extension reloads.</li>
+      <li><strong>In-Memory Working Session:</strong> If no folder is selected, captures and extracted datasets reside solely in browser memory (RAM) and are discarded when the extension page is closed.</li>
+      <li><strong>User-Selected Local Folder:</strong> If you explicitly choose a workspace directory via the File System Access API, captures, schema definitions, and DuckDB snapshots are saved to that folder on your local drive. This data remains on your computer until you delete it.</li>
     </ul>
-    <div class="highlight">
-      <strong>What is captured in regular (Side Panel) mode:</strong><br>
-      JSON response bodies only. Request URLs are sanitized to remove query parameters that may contain tokens or secrets.
-      Request headers and request bodies are <strong>never stored</strong>. Capture stops immediately when you close the side panel or navigate away.
-    </div>
-    <div class="highlight">
-      <strong>What is captured in DevTools mode:</strong><br>
-      Sanitized request URLs, response JSON, and (optionally) GraphQL operation names only. Authentication headers and credentials are never persisted.
-    </div>
   </section>
 
   <section>
-    <h2>4. Permissions Explained</h2>
+    <h2>5. Permissions and Least Privilege</h2>
+    <p>WireData requests only the minimum permissions required for local operation:</p>
     <ul>
-      <li><strong>activeTab</strong> — Temporarily inspect the tab you clicked the extension on. No persistent access to any website.</li>
-      <li><strong>scripting</strong> — Inject temporary fetch/XHR intercept hooks and DOM table extractors, removed when capture stops.</li>
-      <li><strong>sidePanel</strong> — Show the capture controller UI alongside your active tab.</li>
-      <li><strong>storage / unlimitedStorage</strong> — Store captured datasets locally in your browser (IndexedDB). Nothing is sent externally.</li>
+      <li><code>activeTab</code> — Temporarily accesses the single tab where you open the extension. WireData does not have persistent or background access to all websites.</li>
+      <li><code>scripting</code> — Injects the temporary MAIN-world JSON capture hook and DOM table extractor into the active tab upon your explicit request.</li>
+      <li><code>sidePanel</code> — Displays the companion capture and dataset controller UI.</li>
+      <li><code>storage</code> — Manages ephemeral session state and directory handle persistence in IndexedDB.</li>
     </ul>
   </section>
 
   <section>
-    <h2>5. Third-Party Services</h2>
-    <p>WireData uses the following open-source components, all bundled and served locally:</p>
-    <ul>
-      <li><strong>DuckDB-WASM</strong> — In-browser SQL engine. Runs entirely client-side. No network calls.</li>
-    </ul>
-    <p>WireData does <strong>not</strong> use any analytics SDKs, advertising networks, or external API services.</p>
-  </section>
-
-  <section>
-    <h2>6. Data Sharing</h2>
+    <h2>6. Third-Party Code and WebAssembly</h2>
     <p>
-      WireData does not sell, rent, share, or transfer any captured data or any information about you
-      to any third party under any circumstances.
+      WireData bundles <strong>DuckDB-WASM</strong> (an in-browser analytical SQL database) directly inside the extension package.
+      DuckDB runs completely client-side in a WebAssembly worker. WireData does <strong>not</strong> load code, scripts, or WebAssembly binaries from remote CDNs or external servers.
     </p>
   </section>
 
   <section>
-    <h2>7. Data Retention</h2>
+    <h2>7. Data Sharing and Transfer</h2>
     <p>
-      All session state is stored in <code>chrome.storage.session</code>, which is automatically cleared
-      when the browser restarts or the extension is reloaded. Workspace data you choose to save
-      to local files stays on your machine and is under your full control.
+      <strong>No data is ever transferred.</strong> WireData does not sell, trade, transmit, or share your data with any third party, analytics vendor, or cloud provider.
     </p>
   </section>
 
   <section>
-    <h2>8. Children's Privacy</h2>
-    <p>
-      WireData is a professional developer tool and is not directed at children under 13.
-      We do not knowingly collect information from children.
+    <h2>8. Chrome Web Store Limited Use Disclosure</h2>
+    <p class="highlight">
+      WireData's use and transfer to any other app of information received from Chrome APIs will adhere to the
+      <a href="https://developer.chrome.com/docs/webstore/program-policies/user-data/" target="_blank" rel="noopener">Chrome Web Store User Data Policy</a>,
+      including the Limited Use requirements.
     </p>
   </section>
 
   <section>
-    <h2>9. Changes to This Policy</h2>
+    <h2>9. Contact & Source Code</h2>
     <p>
-      If we make material changes to this privacy policy, we will update the "Last updated" date
-      at the top of this page and include a note in the Chrome Web Store changelog.
+      WireData is open source. You can inspect the complete source code, review audits, or submit questions at our GitHub repository:
     </p>
-  </section>
-
-  <section>
-    <h2>10. Contact</h2>
     <p>
-      Questions about this privacy policy? Open an issue on the
-      <a href="https://github.com/ramca-cyber/wiredata-dev" target="_blank" rel="noopener">WireData GitHub repository</a>.
+      <a href="https://github.com/ramca-cyber/wiredata-dev" target="_blank" rel="noopener">https://github.com/ramca-cyber/wiredata-dev</a>
     </p>
   </section>
 </main>

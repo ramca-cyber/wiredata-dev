@@ -661,7 +661,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
           <span style={{ fontWeight: 700, fontSize: 15, color: colors.text, letterSpacing: '-0.02em' }}>
             Network Data Workbench
           </span>
-          <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>v0.1.0</span>
+          <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>
+            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.4'}
+          </span>
           {hostMode === 'devtools' && (
             <span
               style={{

@@ -3,6 +3,23 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import { copyFileSync, existsSync, mkdirSync, createReadStream } from 'fs';
 
+/**
+ * Chrome extension pages are served from chrome-extension://id/ — the extension
+ * resource loader does NOT handle CORS-mode fetches. Vite adds `crossorigin` to
+ * every <script type="module"> and <link rel="modulepreload"> it generates, which
+ * causes Chrome to attempt a CORS fetch that fails, resulting in a blank
+ * chrome-error://chromewebdata/ error page instead of the side panel UI.
+ * This plugin strips `crossorigin` from all generated HTML.
+ */
+function removeCrossoriginPlugin() {
+  return {
+    name: 'remove-crossorigin',
+    transformIndexHtml(html: string): string {
+      return html.replace(/ crossorigin/g, '');
+    },
+  };
+}
+
 function copyManifestPlugin() {
   return {
     name: 'copy-manifest',
@@ -90,12 +107,18 @@ export default defineConfig(({ mode }) => {
     };
   }
 
-  // Default: build the multi-page HTML app (sidepanel, workbench, devtools, panel)
-  // using ES modules with modulepreload — correct for extension pages.
+  // Default: build the multi-page HTML app (sidepanel, workbench, devtools, panel).
+  // removeCrossoriginPlugin() strips the `crossorigin` attribute Vite adds to every
+  // generated <script type="module"> and <link rel="modulepreload">. Without this,
+  // Chrome extension pages show chrome-error://chromewebdata/ because the CORS-mode
+  // fetch of chrome-extension:// resources fails silently.
   return {
-    plugins: [react(), copyManifestPlugin(), duckdbAssetsPlugin()],
+    plugins: [react(), copyManifestPlugin(), duckdbAssetsPlugin(), removeCrossoriginPlugin()],
     build: {
       outDir: 'dist',
+      // Disable the modulePreload polyfill — it adds its own crossorigin attributes
+      // and is not needed (all Chrome versions that support MV3 support modulepreload).
+      modulePreload: { polyfill: false },
       rollupOptions: {
         input: {
           sidepanel: resolve(__dirname, 'sidepanel.html'),
