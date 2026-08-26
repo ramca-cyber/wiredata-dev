@@ -594,8 +594,10 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         nested_array_policy: 'json',
         flatten_delimiter: '__',
       },
-      identity_columns: candidate.sample_keys.includes('id') ? ['id'] : [],
-      deduplication: 'keep_all',
+      identity_columns: candidate.sample_keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k))
+        ? [candidate.sample_keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k))!]
+        : [],
+      deduplication: 'keep_latest',
       columns: {},
     };
 
@@ -1608,8 +1610,10 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                                           nested_array_policy: 'json',
                                           flatten_delimiter: '__',
                                         },
-                                        identity_columns: cand.sample_keys.includes('id') ? ['id'] : [],
-                                        deduplication: 'keep_all',
+                                        identity_columns: cand.sample_keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k))
+                                          ? [cand.sample_keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k))!]
+                                          : [],
+                                        deduplication: 'keep_latest',
                                         columns: {},
                                       };
                                       setDefinitions(prev => [...prev.filter(d => d.id !== dsId), def]);

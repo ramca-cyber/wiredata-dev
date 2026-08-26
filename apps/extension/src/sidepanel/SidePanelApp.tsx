@@ -91,6 +91,35 @@ function generateTypesFromRows(name: string, rows: Record<string, any>[]): { tsI
   };
 }
 
+// Smart deduplication for row records (by primary key ID or content hash)
+function deduplicateRecordObjects(existingRows: Record<string, any>[], newRows: Record<string, any>[]): Record<string, any>[] {
+  const combined = [...existingRows, ...newRows];
+  if (combined.length === 0) return [];
+
+  const firstRow = combined[0];
+  const keys = Object.keys(firstRow);
+  const idCol = keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k));
+
+  const seen = new Set<string>();
+  const uniqueRows: Record<string, any>[] = [];
+
+  for (const row of combined) {
+    let key: string;
+    if (idCol && row[idCol] !== undefined && row[idCol] !== null) {
+      key = String(row[idCol]);
+    } else {
+      key = JSON.stringify(row);
+    }
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueRows.push(row);
+    }
+  }
+
+  return uniqueRows;
+}
+
 export function SidePanelApp() {
   const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
@@ -151,7 +180,9 @@ export function SidePanelApp() {
             if (extractedRows.length > 0) {
               const name = cand.suggested_name === 'rows' && cap.capture_mode === 'dom' ? 'scraped_table' : cand.suggested_name;
               const existing = itemsMap.get(name);
-              const combined = existing ? [...existing.rows, ...extractedRows] : extractedRows;
+              const combined = existing
+                ? deduplicateRecordObjects(existing.rows, extractedRows)
+                : extractedRows;
               const count = existing ? existing.capturesCount + 1 : 1;
               itemsMap.set(name, {
                 name,
@@ -195,7 +226,9 @@ export function SidePanelApp() {
         if (extractedRows.length > 0) {
           setDiscoveredItems(prev => {
             const existing = prev.find(x => x.name === cand.suggested_name);
-            const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
+            const combinedRows = existing
+              ? deduplicateRecordObjects(existing.rows, extractedRows)
+              : extractedRows;
             const capturesCount = existing ? (existing.capturesCount || 1) + 1 : 1;
             const updatedItem: DiscoveredItem = {
               name: cand.suggested_name,
@@ -474,7 +507,9 @@ export function SidePanelApp() {
         const tableName = outcome.candidates[0]?.suggested_name || 'scraped_table';
         setDiscoveredItems(prev => {
           const existing = prev.find(x => x.name === tableName);
-          const combinedRows = existing ? [...existing.rows, ...outcome.body.rows] : outcome.body.rows;
+          const combinedRows = existing
+            ? deduplicateRecordObjects(existing.rows, outcome.body.rows)
+            : outcome.body.rows;
           const capturesCount = existing ? (existing.capturesCount || 1) + 1 : 1;
           const updatedItem: DiscoveredItem = {
             name: tableName,
