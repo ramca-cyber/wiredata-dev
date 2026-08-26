@@ -120,6 +120,10 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     new Map()
   );
 
+  // Scope: Current Page Session vs All Workspace Sessions
+  const [sessionScope, setSessionScope] = useState<'current' | 'all'>('current');
+  const [allSessions, setAllSessions] = useState<CaptureSession[]>([]);
+
   // Selected provenance & modals
   const [selectedRow, setSelectedRow] = useState<ExtractedRow | null>(null);
   const [rawViewerData, setRawViewerData] = useState<{ body: unknown; pointer: string } | null>(null);
@@ -137,21 +141,25 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const adapterRef = useRef<ChromeNetworkCaptureAdapter | null>(null);
 
   /**
-   * Loads the most recent persisted session (captures, body objects, dataset
-   * definitions) from a workspace folder into app state. Without this, the
-   * Side Panel and Workbench share a folder on disk but never share
-   * in-memory state — reopening the Workbench on an existing workspace
-   * always looked empty even though the data was sitting right there.
-   * Snapshots aren't loaded directly; setting captures + definitions lets
-   * the existing rebuild effect below recompute and register them in DuckDB.
-   * Returns true if anything was found and loaded.
+   * Loads persisted sessions (captures, body objects, dataset definitions).
+   * Supports 'current' (latest active session) or 'all' (all workspace sessions).
    */
-  const hydrateFromWorkspace = async (wm: WorkspaceManager): Promise<boolean> => {
+  const hydrateFromWorkspace = async (wm: WorkspaceManager, scope: 'current' | 'all' = sessionScope): Promise<boolean> => {
     const sessions = await wm.listSessions();
     if (sessions.length === 0) return false;
+    setAllSessions(sessions);
 
-    const latestSession = sessions[0]; // listSessions() sorts newest-first
-    const loadedCaptures = await wm.listCaptures(latestSession.session_id);
+    const latestSession = sessions[0];
+    let loadedCaptures: CapturedRequest[] = [];
+
+    if (scope === 'all') {
+      for (const sess of sessions) {
+        const caps = await wm.listCaptures(sess.session_id);
+        loadedCaptures.push(...caps);
+      }
+    } else {
+      loadedCaptures = await wm.listCaptures(latestSession.session_id);
+    }
 
     const loadedCandidates: Array<{ capture: CapturedRequest; candidates: CandidateCollection[] }> = [];
     for (const capture of loadedCaptures) {
@@ -159,7 +167,11 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       const body = await wm.getBodyObject(capture.response.body_hash);
       if (body === null) continue;
       responseBodiesRef.current.set(capture.response.body_hash, body);
-      const candidates = detectCandidateCollections(body);
+      const rawCands = detectCandidateCollections(body);
+      const candidates = rawCands.map(c => ({
+        ...c,
+        suggested_name: c.suggested_name === 'rows' && capture.capture_mode === 'dom' ? 'scraped_table' : c.suggested_name,
+      }));
       if (candidates.length > 0) {
         loadedCandidates.push({ capture, candidates });
       }
@@ -176,6 +188,11 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     }
 
     return true;
+  };
+
+  const handleScopeChange = async (scope: 'current' | 'all') => {
+    setSessionScope(scope);
+    await hydrateFromWorkspace(workspaceManager, scope);
   };
 
   // Initialize workspace & session
@@ -957,7 +974,41 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
           {activeView === 'captures' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <h2 style={{ margin: 0, fontSize: 18, color: colors.text }}>Captured Traffic Log ({captures.length})</h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <h2 style={{ margin: 0, fontSize: 18, color: colors.text }}>Captured Traffic Log ({captures.length})</h2>
+                  <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 2 }}>
+                    <button
+                      onClick={() => handleScopeChange('current')}
+                      style={{
+                        background: sessionScope === 'current' ? colors.hoverBg : 'transparent',
+                        color: sessionScope === 'current' ? colors.primaryLight : colors.textMuted,
+                        border: 'none',
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      🌐 Current Page Only
+                    </button>
+                    <button
+                      onClick={() => handleScopeChange('all')}
+                      style={{
+                        background: sessionScope === 'all' ? colors.hoverBg : 'transparent',
+                        color: sessionScope === 'all' ? colors.primaryLight : colors.textMuted,
+                        border: 'none',
+                        borderRadius: 4,
+                        padding: '4px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      📁 All Workspace ({allSessions.length})
+                    </button>
+                  </div>
+                </div>
                 {captures.length > 0 && (
                   <button
                     onClick={handleClearCaptures}
@@ -1086,13 +1137,47 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
           {/* Candidates View */}
           {activeView === 'candidates' && (
             <div style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
-              <div style={{ marginBottom: 20 }}>
-                <h2 style={{ margin: '0 0 6px 0', fontSize: 18, color: colors.text }}>
-                  Discovered Data Collections
-                </h2>
-                <p style={{ margin: 0, color: colors.textMuted, fontSize: 13 }}>
-                  Automatically grouped by logical API route. You can extract combined datasets across all paginated captures or extract individual requests and nested sub-collections.
-                </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ margin: '0 0 6px 0', fontSize: 18, color: colors.text }}>
+                    Discovered Data Collections
+                  </h2>
+                  <p style={{ margin: 0, color: colors.textMuted, fontSize: 13 }}>
+                    Automatically grouped by logical API route. You can extract combined datasets across all paginated captures or extract individual requests and nested sub-collections.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 2, flexShrink: 0 }}>
+                  <button
+                    onClick={() => handleScopeChange('current')}
+                    style={{
+                      background: sessionScope === 'current' ? colors.hoverBg : 'transparent',
+                      color: sessionScope === 'current' ? colors.primaryLight : colors.textMuted,
+                      border: 'none',
+                      borderRadius: 4,
+                      padding: '4px 10px',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    🌐 Current Page Only
+                  </button>
+                  <button
+                    onClick={() => handleScopeChange('all')}
+                    style={{
+                      background: sessionScope === 'all' ? colors.hoverBg : 'transparent',
+                      color: sessionScope === 'all' ? colors.primaryLight : colors.textMuted,
+                      border: 'none',
+                      borderRadius: 4,
+                      padding: '4px 10px',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    📁 All Workspace ({allSessions.length})
+                  </button>
+                </div>
               </div>
 
               {groupedRouteCandidates.length === 0 ? (

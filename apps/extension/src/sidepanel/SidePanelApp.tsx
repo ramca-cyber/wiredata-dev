@@ -9,6 +9,7 @@ import {
   CandidateCollection,
   CapturedRequest,
   CaptureSession,
+  detectCandidateCollections,
   generateULID,
   redactQueryParams,
   ULID,
@@ -44,6 +45,8 @@ export function SidePanelApp() {
   const [captureCount, setCaptureCount] = useState<number>(0);
   const [totalBytes, setTotalBytes] = useState<number>(0);
   const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
+  const [allHistoryItems, setAllHistoryItems] = useState<DiscoveredItem[]>([]);
+  const [viewScope, setViewScope] = useState<'current' | 'all'>('current');
   const [copiedName, setCopiedName] = useState<string | null>(null);
   const [previewItem, setPreviewItem] = useState<DiscoveredItem | null>(null);
 
@@ -56,6 +59,53 @@ export function SidePanelApp() {
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
   const pendingWritesRef = useRef<Set<Promise<unknown>>>(new Set());
+
+  const loadAllHistory = async (wm: WorkspaceManager) => {
+    try {
+      const sessions = await wm.listSessions();
+      const itemsMap = new Map<string, DiscoveredItem>();
+
+      for (const sess of sessions) {
+        const caps = await wm.listCaptures(sess.session_id);
+        for (const cap of caps) {
+          if (!cap.response.body_hash) continue;
+          const body = await wm.getBodyObject(cap.response.body_hash);
+          if (!body) continue;
+          const cands = detectCandidateCollections(body);
+          for (const cand of cands) {
+            let extractedRows: Record<string, any>[] = [];
+            if (!cand.pointer || cand.pointer === '' || cand.pointer === '/') {
+              extractedRows = Array.isArray(body) ? body : [];
+            } else {
+              try {
+                const ptrParts = cand.pointer.replace(/^\//, '').split('/');
+                let cur: any = body;
+                for (const part of ptrParts) {
+                  if (cur && typeof cur === 'object') cur = cur[part];
+                }
+                extractedRows = Array.isArray(cur) ? cur : [];
+              } catch {}
+            }
+
+            if (extractedRows.length > 0) {
+              const name = cand.suggested_name === 'rows' && cap.capture_mode === 'dom' ? 'scraped_table' : cand.suggested_name;
+              const existing = itemsMap.get(name);
+              const combined = existing ? [...existing.rows, ...extractedRows] : extractedRows;
+              const count = existing ? existing.capturesCount + 1 : 1;
+              itemsMap.set(name, {
+                name,
+                rowCount: combined.length,
+                capturesCount: count,
+                source: cap.capture_mode === 'dom' ? 'DOM Table' : `JSON API (${cap.request.method})`,
+                rows: combined,
+              });
+            }
+          }
+        }
+      }
+      setAllHistoryItems(Array.from(itemsMap.values()));
+    } catch {}
+  };
 
   const attachCaptureCallback = (sessionId: ULID, wm: WorkspaceManager) => (
     capture: CapturedRequest,
@@ -512,31 +562,136 @@ export function SidePanelApp() {
         <button onClick={handleToggleCapture} style={{ background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)', color: '#ffffff', border: 'none', borderRadius: 6, padding: '10px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)' }}>{isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}</button>
       </div>
 
-      {discoveredItems.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, marginBottom: 8, letterSpacing: '0.04em' }}>📦 Discovered Collections ({discoveredItems.length})</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {discoveredItems.map(item => (
-              <div key={item.name} style={{ background: colors.cardBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>{item.name}</span>
-                    <span style={{ marginLeft: 6, fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
-                      {item.rowCount} rows{item.capturesCount > 1 ? ` (${item.capturesCount} captures)` : ''}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => setPreviewItem(item)} style={{ flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.text, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>👁️ Preview</button>
-                  <button onClick={() => handleExportCsv(item)} style={{ flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.success, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>💾 CSV</button>
-                  <button onClick={() => handleCopyJson(item)} style={{ flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: copiedName === item.name ? colors.success : colors.textMuted, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{copiedName === item.name ? '✓ Copied' : '📋 JSON'}</button>
-                </div>
+      {/* Discovered Collections & Direct Actions (The Power Section) */}
+      {(() => {
+        const visibleItems = viewScope === 'current' ? discoveredItems : (allHistoryItems.length > 0 ? allHistoryItems : discoveredItems);
+        if (visibleItems.length === 0 && discoveredItems.length === 0) return null;
+
+        return (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, letterSpacing: '0.04em' }}>
+                📦 Collections ({visibleItems.length})
               </div>
-            ))}
+              <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: 2 }}>
+                <button
+                  onClick={() => setViewScope('current')}
+                  style={{
+                    background: viewScope === 'current' ? colors.cardBg : 'transparent',
+                    color: viewScope === 'current' ? colors.primaryLight : colors.textDim,
+                    border: 'none',
+                    borderRadius: 3,
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  🌐 Current Page
+                </button>
+                <button
+                  onClick={async () => {
+                    setViewScope('all');
+                    await loadAllHistory(workspaceManager);
+                  }}
+                  style={{
+                    background: viewScope === 'all' ? colors.cardBg : 'transparent',
+                    color: viewScope === 'all' ? colors.primaryLight : colors.textDim,
+                    border: 'none',
+                    borderRadius: 3,
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  📁 All History
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {visibleItems.map(item => (
+                <div
+                  key={item.name}
+                  style={{
+                    background: colors.cardBg,
+                    border: `1px solid ${colors.borderLight}`,
+                    borderRadius: 8,
+                    padding: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>
+                        {item.name}
+                      </span>
+                      <span style={{ marginLeft: 6, fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
+                        {item.rowCount} rows{item.capturesCount > 1 ? ` (${item.capturesCount} captures)` : ''}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      onClick={() => setPreviewItem(item)}
+                      style={{
+                        flex: 1,
+                        background: colors.panelBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: colors.text,
+                        borderRadius: 4,
+                        padding: '5px 8px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      👁️ Preview
+                    </button>
+                    <button
+                      onClick={() => handleExportCsv(item)}
+                      style={{
+                        flex: 1,
+                        background: colors.panelBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: colors.success,
+                        borderRadius: 4,
+                        padding: '5px 8px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      💾 CSV
+                    </button>
+                    <button
+                      onClick={() => handleCopyJson(item)}
+                      style={{
+                        flex: 1,
+                        background: colors.panelBg,
+                        border: `1px solid ${colors.borderLight}`,
+                        color: copiedName === item.name ? colors.success : colors.textMuted,
+                        borderRadius: 4,
+                        padding: '5px 8px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {copiedName === item.name ? '✓ Copied' : '📋 JSON'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       <div style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
