@@ -1139,7 +1139,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
                             {routeGroup.method}
                           </span>
                           <span style={{ fontSize: 14, fontWeight: 700, color: colors.text, fontFamily: fonts.mono }}>
-                            {routeGroup.route_template}
+                            {routeGroup.route_template.startsWith(routeGroup.method + ' ')
+                              ? routeGroup.route_template.slice(routeGroup.method.length + 1)
+                              : routeGroup.route_template}
                           </span>
                           {routeGroup.graphql_operation && (
                             <span style={{ fontSize: 12, color: colors.accent, background: `${colors.accent}22`, padding: '2px 6px', borderRadius: 4 }}>

@@ -450,6 +450,7 @@ export function SidePanelApp() {
     }
   };
 
+  const isWorkbenchTab = !!activeTab?.url?.includes('workbench.html');
   const isRestrictedPage = !activeTab?.url || activeTab.url.startsWith('chrome');
   const hostName = activeTab?.url && !isRestrictedPage ? (() => { try { return new URL(activeTab.url).hostname; } catch { return activeTab.url; } })() : null;
 
@@ -468,6 +469,11 @@ export function SidePanelApp() {
         <div style={{ fontSize: 10, color: colors.textDim, textTransform: 'uppercase', fontWeight: 700, marginBottom: 2 }}>Target Page</div>
         {hostName ? (
           <div style={{ fontSize: 13, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>{hostName}</div>
+        ) : isWorkbenchTab ? (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: colors.primaryLight }}>📊 WireData Workbench Active</div>
+            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>Switch to any website tab to record live API traffic.</div>
+          </div>
         ) : (
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: colors.warning }}>⚠️ No Active Web Page</div>

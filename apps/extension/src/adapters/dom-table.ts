@@ -99,7 +99,11 @@ export async function captureTableFromActiveTab(
     },
   };
 
-  const candidates = detectCandidateCollections(body);
+  const rawCandidates = detectCandidateCollections(body);
+  const candidates = rawCandidates.map(c => ({
+    ...c,
+    suggested_name: c.suggested_name === 'rows' ? 'scraped_table' : c.suggested_name,
+  }));
 
   return {
     capture,
