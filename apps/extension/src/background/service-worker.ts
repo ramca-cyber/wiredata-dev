@@ -238,7 +238,17 @@ async function stopCaptureForTab(tabId: number): Promise<void> {
   }
 }
 
-// 1. Action click opens side panel on current tab
+// 1. On install/update: set panel to open automatically on action click.
+// This is the most reliable path — Chrome handles the open internally
+// without requiring the onClicked listener. The onClicked handler below
+// is kept as defense-in-depth for pre-116 fallback paths.
+chrome.runtime.onInstalled.addListener(() => {
+  try {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  } catch {}
+});
+
+// 2. Action click: also explicitly open side panel (belt-and-suspenders).
 chrome.action.onClicked.addListener(async tab => {
   if (tab.id) {
     try {

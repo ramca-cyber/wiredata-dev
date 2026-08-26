@@ -17,7 +17,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint . --ext .ts,.tsx",
     "check": "npm run typecheck && npm test && npm run build",
-    "package": "npm run check && powershell -Command \"New-Item -ItemType Directory -Force -Path release; Compress-Archive -Path apps/extension/dist/* -DestinationPath release/wiredata-extension-v0.1.2.zip -Force\""
+    "package": "npm run check && powershell -Command \"New-Item -ItemType Directory -Force -Path release; Compress-Archive -Path apps/extension/dist/* -DestinationPath release/wiredata-extension-v0.1.3.zip -Force\""
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

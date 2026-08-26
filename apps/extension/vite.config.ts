@@ -53,30 +53,62 @@ function duckdbAssetsPlugin() {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), copyManifestPlugin(), duckdbAssetsPlugin()],
-  build: {
-    outDir: 'dist',
-    rollupOptions: {
-      input: {
-        sidepanel: resolve(__dirname, 'sidepanel.html'),
-        workbench: resolve(__dirname, 'workbench.html'),
-        devtools: resolve(__dirname, 'devtools.html'),
-        panel: resolve(__dirname, 'panel.html'),
-        'service-worker': resolve(__dirname, 'src/background/service-worker.ts'),
-        bridge: resolve(__dirname, 'src/capture/bridge.ts'),
+export default defineConfig(({ mode }) => {
+  // When building the service-worker and bridge as separate classic (IIFE)
+  // scripts, we use the SW_BUILD env var. Normal build handles HTML pages.
+  const isSwBuild = mode === 'sw';
+
+  if (isSwBuild) {
+    const target = process.env.SW_TARGET ?? 'service-worker';
+    const outputName = target === 'bridge' ? 'bridge.js' : 'service-worker.js';
+    const inputFile = target === 'bridge'
+      ? resolve(__dirname, 'src/capture/bridge.ts')
+      : resolve(__dirname, 'src/background/service-worker.ts');
+
+    // Build service-worker.js and bridge.js as plain IIFE scripts.
+    // IIFE requires a single entry (inlineDynamicImports). These must NOT use
+    // ES module syntax because:
+    //   - service-worker: manifest.json has no "type":"module" — Chrome
+    //     loads it as a classic script.
+    //   - bridge.js: injected via chrome.scripting.executeScript({files:['bridge.js']})
+    //     into a content-script (isolated) world — must be a classic script.
+    return {
+      plugins: [copyManifestPlugin(), duckdbAssetsPlugin()],
+      build: {
+        outDir: 'dist',
+        emptyOutDir: false, // Don't wipe HTML build output
+        rollupOptions: {
+          input: inputFile,
+          output: {
+            format: 'iife',
+            entryFileNames: outputName,
+            inlineDynamicImports: true,
+            name: 'WireData',
+          },
+        },
       },
-      output: {
-        entryFileNames: chunkInfo => {
-          if (chunkInfo.name === 'service-worker') {
-            return 'service-worker.js';
-          }
-          if (chunkInfo.name === 'bridge') {
-            return 'bridge.js';
-          }
-          return 'assets/[name]-[hash].js';
+    };
+  }
+
+  // Default: build the multi-page HTML app (sidepanel, workbench, devtools, panel)
+  // using ES modules with modulepreload — correct for extension pages.
+  return {
+    plugins: [react(), copyManifestPlugin(), duckdbAssetsPlugin()],
+    build: {
+      outDir: 'dist',
+      rollupOptions: {
+        input: {
+          sidepanel: resolve(__dirname, 'sidepanel.html'),
+          workbench: resolve(__dirname, 'workbench.html'),
+          devtools: resolve(__dirname, 'devtools.html'),
+          panel: resolve(__dirname, 'panel.html'),
+        },
+        output: {
+          entryFileNames: 'assets/[name]-[hash].js',
+          chunkFileNames: 'assets/[name]-[hash].js',
+          assetFileNames: 'assets/[name]-[hash][extname]',
         },
       },
     },
-  },
+  };
 });
