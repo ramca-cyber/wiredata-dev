@@ -1,7 +1,8 @@
 {
   "name": "wiredata-dev",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
+  "type": "module",
   "description": "Network Data Workbench - Turn structured JSON application traffic into queryable, traceable local datasets",
   "workspaces": [
     "packages/*",
@@ -17,10 +18,11 @@
     "typecheck": "tsc -b",
     "lint": "eslint . --ext .ts,.tsx",
     "check": "npm run typecheck && npm test && npm run build",
-    "package": "npm run check && powershell -Command \"New-Item -ItemType Directory -Force -Path release; Compress-Archive -Path apps/extension/dist/* -DestinationPath release/wiredata-extension-v0.1.4.zip -Force\""
+    "package": "npm run check && powershell -Command \"New-Item -ItemType Directory -Force -Path release; Compress-Archive -Path apps/extension/dist/* -DestinationPath release/wiredata-extension-v0.1.5.zip -Force\" && node scripts/validate-release.js"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
+    "adm-zip": "^0.6.0",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   }

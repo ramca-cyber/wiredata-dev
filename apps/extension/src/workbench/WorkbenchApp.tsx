@@ -28,7 +28,7 @@ import {
 import {
   DirectoryHandleManager,
   FSDirectoryAdapter,
-  InMemoryFileAdapter,
+  createDefaultWorkspaceAdapter,
   WorkspaceManager,
 } from '@wiredata/workspace';
 import { DuckDBClient, ParseRuleSuggestion } from '@wiredata/duckdb';
@@ -95,11 +95,11 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
 
-  // Storage and Manager
+  // Storage and Manager (defaults to shared browser-local IndexedDB storage)
   const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
-    () => new WorkspaceManager(new InMemoryFileAdapter())
+    () => new WorkspaceManager(createDefaultWorkspaceAdapter())
   );
-  const [workspaceName, setWorkspaceName] = useState<string>('In-Memory Working Session');
+  const [workspaceName, setWorkspaceName] = useState<string>('Browser Storage (Local)');
   const [duckdbClient] = useState<DuckDBClient>(() => new DuckDBClient());
   const [duckdbStatus, setDuckdbStatus] = useState<{ ready: boolean; error: string | null }>({
     ready: false,
@@ -681,26 +681,42 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {import.meta.env.DEV && (
+          {hostMode === 'devtools' && (
             <button
-              onClick={handleSimulateFixtureTraffic}
+              onClick={toggleCapture}
               style={{
-                background: colors.cardBg,
-                color: colors.primaryLight,
-                border: `1px solid ${colors.primary}66`,
+                background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
+                color: '#ffffff',
+                border: 'none',
                 borderRadius: 6,
                 padding: '6px 12px',
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
               }}
             >
-              ⚡ Ingest Fixture Data
+              {isCapturing ? '⏹ Stop DevTools Capture' : '⏺ Start DevTools Capture'}
             </button>
           )}
+          <button
+            onClick={handleSimulateFixtureTraffic}
+            title="Load sample dataset (e-commerce orders and customers) to test queries, schema, and views"
+            style={{
+              background: colors.cardBg,
+              color: colors.primaryLight,
+              border: `1px solid ${colors.primary}66`,
+              borderRadius: 6,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            ⚡ Load Sample Data
+          </button>
           <button
             onClick={handleClearAllData}
             title="Reset workbench and clear all data"
@@ -763,6 +779,28 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
           )}
         </div>
       </header>
+
+      {/* DevTools Pre-Capture Prominent Disclosure */}
+      {hostMode === 'devtools' && (
+        <div
+          style={{
+            padding: '8px 20px',
+            background: isCapturing ? `${colors.error}11` : colors.panelBg,
+            borderBottom: `1px solid ${isCapturing ? colors.error : colors.borderLight}`,
+            fontSize: 12,
+            color: colors.textMuted,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>
+            {isCapturing
+              ? '● DevTools Capture Active: Recording JSON API responses and sanitized URLs from inspected tab. Request auth headers are not stored. All processing stays strictly local.'
+              : 'ℹ️ DevTools Capture: WireData will locally record JSON response bodies and sanitized request URLs from this inspected tab. Request authentication headers are not stored. Response bodies are stored as returned and may contain sensitive information. Nothing is transmitted to WireData or third parties.'}
+          </span>
+        </div>
+      )}
 
       {/* Main Body */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>

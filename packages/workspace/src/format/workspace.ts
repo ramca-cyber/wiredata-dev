@@ -39,14 +39,14 @@ export class InMemoryFileAdapter implements IFileAdapter {
   }
 
   async listFiles(dirPath: string): Promise<string[]> {
-    const normalizedDir = dirPath.endsWith('/') ? dirPath : `${dirPath}/`;
+    const normalizedDir = dirPath ? (dirPath.endsWith('/') ? dirPath : `${dirPath}/`) : '';
     const results = new Set<string>();
     for (const key of this.files.keys()) {
       if (key.startsWith(normalizedDir)) {
         const sub = key.slice(normalizedDir.length);
         const nextSlash = sub.indexOf('/');
         const item = nextSlash === -1 ? sub : sub.slice(0, nextSlash);
-        results.add(item);
+        if (item) results.add(item);
       }
     }
     return Array.from(results);
@@ -59,6 +59,130 @@ export class InMemoryFileAdapter implements IFileAdapter {
   async createDir(): Promise<void> {
     // No-op for flat map
   }
+}
+
+const IDB_WORKSPACE_DB = 'wiredata_local_workspace';
+const IDB_FILES_STORE = 'workspace_files';
+
+/**
+ * Shared browser-local storage adapter using IndexedDB.
+ * Allows Side Panel, Workbench tabs, and DevTools to share the same local
+ * workspace seamlessly without requiring the user to pick a disk folder first.
+ */
+export class IndexedDBFileAdapter implements IFileAdapter {
+  private dbPromise: Promise<IDBDatabase> | null = null;
+
+  private getDb(): Promise<IDBDatabase> {
+    if (this.dbPromise) return this.dbPromise;
+    this.dbPromise = new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') {
+        return reject(new Error('IndexedDB is not available in this environment.'));
+      }
+      const req = indexedDB.open(IDB_WORKSPACE_DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_FILES_STORE)) {
+          db.createObjectStore(IDB_FILES_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return this.dbPromise;
+  }
+
+  async readFile(path: string): Promise<string | null> {
+    try {
+      const db = await this.getDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_FILES_STORE, 'readonly');
+        const store = tx.objectStore(IDB_FILES_STORE);
+        const req = store.get(path);
+        req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async writeFile(path: string, content: string): Promise<void> {
+    const db = await this.getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_FILES_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_FILES_STORE);
+      const req = store.put(content, path);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async listFiles(dirPath: string): Promise<string[]> {
+    try {
+      const db = await this.getDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_FILES_STORE, 'readonly');
+        const store = tx.objectStore(IDB_FILES_STORE);
+        const req = store.getAllKeys();
+        req.onsuccess = () => {
+          const keys = (req.result as string[]) || [];
+          const normalizedDir = dirPath ? (dirPath.endsWith('/') ? dirPath : `${dirPath}/`) : '';
+          const results = new Set<string>();
+          for (const key of keys) {
+            if (typeof key === 'string' && key.startsWith(normalizedDir)) {
+              const sub = key.slice(normalizedDir.length);
+              const nextSlash = sub.indexOf('/');
+              const item = nextSlash === -1 ? sub : sub.slice(0, nextSlash);
+              if (item) results.add(item);
+            }
+          }
+          resolve(Array.from(results));
+        };
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    try {
+      const db = await this.getDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_FILES_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_FILES_STORE);
+        const req = store.delete(path);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch {}
+  }
+
+  async createDir(): Promise<void> {
+    // Flat key-value store doesn't need explicit directories
+  }
+
+  async clearAll(): Promise<void> {
+    try {
+      const db = await this.getDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_FILES_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_FILES_STORE);
+        const req = store.clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch {}
+  }
+}
+
+/**
+ * Creates the default workspace adapter:
+ * - IndexedDBFileAdapter in browser environments (shared between Side Panel and Workbench)
+ * - InMemoryFileAdapter in Node.js / testing environments
+ */
+export function createDefaultWorkspaceAdapter(): IFileAdapter {
+  return typeof indexedDB !== 'undefined' ? new IndexedDBFileAdapter() : new InMemoryFileAdapter();
 }
 
 /**

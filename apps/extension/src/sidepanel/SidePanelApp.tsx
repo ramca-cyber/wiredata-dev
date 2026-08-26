@@ -15,7 +15,7 @@ import {
 import {
   DirectoryHandleManager,
   FSDirectoryAdapter,
-  InMemoryFileAdapter,
+  createDefaultWorkspaceAdapter,
   WorkspaceManager,
 } from '@wiredata/workspace';
 import { colors, fonts } from '@wiredata/ui';
@@ -38,13 +38,12 @@ export function SidePanelApp() {
   const [totalBytes, setTotalBytes] = useState<number>(0);
   const [detectedCollections, setDetectedCollections] = useState<Map<string, number>>(new Map());
 
-  // Workspace
+  // Workspace: defaults to shared browser-local IndexedDB storage
   const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
-    () => new WorkspaceManager(new InMemoryFileAdapter())
+    () => new WorkspaceManager(createDefaultWorkspaceAdapter())
   );
-  const [workspaceName, setWorkspaceName] = useState<string>('In-Memory Working Session');
-  // Whether a real on-disk folder has been selected. Capture works without
-  // one (in-memory) but data won't persist across panel reloads.
+  const [workspaceName, setWorkspaceName] = useState<string>('Browser Storage (Local)');
+  // Whether a real on-disk folder has been selected for export / persistence
   const [hasPersistentWorkspace, setHasPersistentWorkspace] = useState<boolean>(false);
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
@@ -161,11 +160,6 @@ export function SidePanelApp() {
 
     init();
 
-    // Listen for broadcasts from the service worker. Delivery is plain
-    // runtime messages, not a long-lived port — the worker can be killed
-    // and restarted between messages at any time, and a port held open in
-    // its global scope would silently stop being able to deliver anything
-    // the moment that happens.
     const listener = (msg: any) => {
       if (msg?.type === 'CAPTURE_STATUS_CHANGED') {
         setIsCapturing(msg.isCapturing);
@@ -175,9 +169,29 @@ export function SidePanelApp() {
       chrome.runtime.onMessage.addListener(listener);
     }
 
+    // Listen for tab switching to keep active target tab updated
+    const handleTabActivated = async (activeInfo: chrome.tabs.TabActiveInfo) => {
+      try {
+        const tab = await chrome.tabs.get(activeInfo.tabId);
+        if (tab) {
+          setActiveTab({
+            id: tab.id,
+            url: tab.url || '',
+            title: tab.title || '',
+          });
+        }
+      } catch {}
+    };
+    if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
+      chrome.tabs.onActivated.addListener(handleTabActivated);
+    }
+
     return () => {
       if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
         chrome.runtime.onMessage.removeListener(listener);
+      }
+      if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
+        chrome.tabs.onActivated.removeListener(handleTabActivated);
       }
     };
   }, []);
@@ -434,8 +448,8 @@ export function SidePanelApp() {
 
         <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
           {isCapturing
-            ? 'Recording JSON fetch & XHR responses from this tab. Request auth headers and credential URL parameters are redacted. All processing stays strictly local.'
-            : 'Capture is off. When started, WireData will read JSON API responses and request URLs from this tab. Data is processed locally on your device and never sent to external servers.'}
+            ? 'Recording JSON fetch & XHR responses. Request authentication headers are not stored. Credential-like URL parameters are redacted before storage. JSON response bodies are stored as returned and may contain sensitive information. All processing stays strictly on your device.'
+            : 'Capture is off. When started, WireData will locally record JSON API responses and sanitized request URLs from this tab. Request authentication headers are not stored.'}
         </p>
 
         {isCapturing && (
