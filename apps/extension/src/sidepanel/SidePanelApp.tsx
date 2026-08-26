@@ -1,6 +1,7 @@
 /**
  * WireData Side Panel Companion App
- * Capture controller, visible privacy status indicator, quick dataset counters, and full workbench launcher.
+ * Capture controller, visible privacy status indicator, quick dataset counters,
+ * inline table previewer, 1-click CSV export, and full workbench launcher.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -22,6 +23,13 @@ import { colors, fonts } from '@wiredata/ui';
 import { PageNetworkCaptureAdapter } from '../adapters/page.js';
 import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
+interface DiscoveredItem {
+  name: string;
+  rowCount: number;
+  source: string;
+  rows: Record<string, any>[];
+}
+
 export function SidePanelApp() {
   const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
@@ -29,21 +37,20 @@ export function SidePanelApp() {
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [isScraping, setIsScraping] = useState<boolean>(false);
-  const [scrapeStatus, setScrapeStatus] = useState<{ message: string; tone: 'success' | 'warning' | 'error' } | null>(
-    null
-  );
+  const [scrapeStatus, setScrapeStatus] = useState<{ message: string; tone: 'success' | 'warning' | 'error' } | null>(null);
 
-  // Metrics
+  // Metrics & Discovered Collections
   const [captureCount, setCaptureCount] = useState<number>(0);
   const [totalBytes, setTotalBytes] = useState<number>(0);
-  const [detectedCollections, setDetectedCollections] = useState<Map<string, number>>(new Map());
+  const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
+  const [copiedName, setCopiedName] = useState<string | null>(null);
+  const [previewItem, setPreviewItem] = useState<DiscoveredItem | null>(null);
 
   // Workspace: defaults to shared browser-local IndexedDB storage
   const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
     () => new WorkspaceManager(createDefaultWorkspaceAdapter())
   );
   const [workspaceName, setWorkspaceName] = useState<string>('Browser Storage (Local)');
-  // Whether a real on-disk folder has been selected for export / persistence
   const [hasPersistentWorkspace, setHasPersistentWorkspace] = useState<boolean>(false);
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
@@ -57,13 +64,34 @@ export function SidePanelApp() {
     setCaptureCount(prev => prev + 1);
     setTotalBytes(prev => prev + (capture.response.body_size || 0));
 
-    for (const cand of candidates) {
-      setDetectedCollections(prev => {
-        const next = new Map(prev);
-        const cur = next.get(cand.suggested_name) || 0;
-        next.set(cand.suggested_name, cur + cand.row_count);
-        return next;
-      });
+    if (candidates && candidates.length > 0) {
+      for (const cand of candidates) {
+        let extractedRows: Record<string, any>[] = [];
+        if (!cand.pointer || cand.pointer === '' || cand.pointer === '/') {
+          extractedRows = Array.isArray(rawBody) ? rawBody : [];
+        } else {
+          try {
+            const ptrParts = cand.pointer.replace(/^\//, '').split('/');
+            let cur: any = rawBody;
+            for (const part of ptrParts) {
+              if (cur && typeof cur === 'object') cur = cur[part];
+            }
+            extractedRows = Array.isArray(cur) ? cur : [];
+          } catch {}
+        }
+
+        if (extractedRows.length > 0) {
+          setDiscoveredItems(prev => [
+            {
+              name: cand.suggested_name,
+              rowCount: cand.row_count,
+              source: `JSON API (${capture.request.method})`,
+              rows: extractedRows,
+            },
+            ...prev.filter(x => x.name !== cand.suggested_name),
+          ]);
+        }
+      }
     }
 
     const writePromise = wm.saveCapture(sessionId, capture, rawBody)
@@ -73,33 +101,21 @@ export function SidePanelApp() {
     pendingWritesRef.current.add(writePromise);
   };
 
-  // 1. Detect current active tab, initialize/reconcile workspace and session state
   useEffect(() => {
     const init = async () => {
-      // 0. Parse query params if opened from action click
       try {
         const params = new URLSearchParams(window.location.search);
         const pId = params.get('tabId');
         const pUrl = params.get('tabUrl');
         if (pId) {
-          setActiveTab({
-            id: Number(pId),
-            url: pUrl ? decodeURIComponent(pUrl) : '',
-            title: '',
-          });
+          setActiveTab({ id: Number(pId), url: pUrl ? decodeURIComponent(pUrl) : '', title: '' });
         }
       } catch {}
 
-      // 1. Query active tab (check lastFocusedWindow, then currentWindow, then any active tab)
       if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
         try {
           let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-          if (!tabs[0]) {
-            tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          }
-          if (!tabs[0]) {
-            tabs = await chrome.tabs.query({ active: true });
-          }
+          if (!tabs[0]) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
           if (tabs[0]?.id) {
             setActiveTab(prev => ({
               id: tabs[0].id ?? prev?.id,
@@ -112,8 +128,6 @@ export function SidePanelApp() {
         }
       }
 
-      // Restore workspace handle (requires readwrite: this panel writes captures,
-      // datasets, and exports, not just reads them)
       let wm = workspaceManager;
       try {
         const cachedHandle = await DirectoryHandleManager.loadHandle();
@@ -136,10 +150,6 @@ export function SidePanelApp() {
         await workspaceManager.openOrCreateWorkspace();
       }
 
-      // Check the service worker's live ephemeral session state. The worker
-      // itself can be killed and restarted at any time, so this is the
-      // authoritative source for "is a capture actually running right now" —
-      // not anything we might have persisted to disk previously.
       let liveState: { isCapturing: boolean; activeTabId: number | null; activeSessionId: string | null } | null = null;
       if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
         try {
@@ -147,37 +157,16 @@ export function SidePanelApp() {
         } catch {}
       }
 
-      // Reconcile any sessions this panel previously wrote as 'capturing' that
-      // the service worker no longer considers active (panel/tab closed, tab
-      // navigated origin, or the worker restarted mid-capture without ever
-      // getting a chance to finalize the persisted session on disk).
       try {
         const sessions = await wm.listSessions();
-        for (const session of sessions) {
-          if (session.status !== 'capturing') continue;
-          const stillLive = liveState?.isCapturing && liveState.activeSessionId === session.session_id;
-          if (!stillLive) {
-            await wm.saveSession({ ...session, status: 'recovered', ended_at: session.ended_at || new Date().toISOString() });
-          } else {
-            // Resume reflecting the live session in this panel, and reattach
-            // a real adapter so Stop Capture actually has something to stop —
-            // without this, a panel reopened mid-capture shows "capturing"
-            // but pressing Stop is a no-op.
-            const existingCaptures = await wm.listCaptures(session.session_id);
-            const bytes = existingCaptures.reduce((acc, c) => acc + (c.response.body_size || 0), 0);
-            setActiveSession(session);
-            setCaptureCount(existingCaptures.length);
-            setTotalBytes(bytes);
-            if (liveState?.activeTabId) {
-              const adapter = new PageNetworkCaptureAdapter(
-                session.session_id,
-                liveState.activeTabId,
-                session.initial_page_url,
-                attachCaptureCallback(session.session_id, wm)
-              );
-              adapterRef.current = adapter;
-            }
-            setIsCapturing(true);
+        const staleCapturing = sessions.filter((s: CaptureSession) => s.status === 'capturing');
+        for (const s of staleCapturing) {
+          if (!liveState?.isCapturing || liveState.activeSessionId !== s.session_id) {
+            await wm.saveSession({
+              ...s,
+              status: 'recovered',
+              ended_at: s.ended_at || new Date().toISOString(),
+            });
           }
         }
       } catch {}
@@ -188,23 +177,22 @@ export function SidePanelApp() {
     const listener = (msg: any) => {
       if (msg?.type === 'CAPTURE_STATUS_CHANGED') {
         setIsCapturing(msg.isCapturing);
+        if (!msg.isCapturing) {
+          adapterRef.current = null;
+        }
       }
     };
+
     if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener(listener);
     }
 
-    // Listen for tab switch events
     const tabActivatedListener = async (activeInfo: { tabId: number; windowId: number }) => {
       if (typeof chrome !== 'undefined' && chrome.tabs?.get) {
         try {
           const tab = await chrome.tabs.get(activeInfo.tabId);
           if (tab?.id) {
-            setActiveTab({
-              id: tab.id,
-              url: tab.url || tab.pendingUrl || '',
-              title: tab.title || '',
-            });
+            setActiveTab({ id: tab.id, url: tab.url || tab.pendingUrl || '', title: tab.title || '' });
           }
         } catch {}
       }
@@ -224,7 +212,6 @@ export function SidePanelApp() {
     };
   }, []);
 
-  // Pick Workspace Directory
   const handleSelectWorkspace = async () => {
     try {
       const handle = await DirectoryHandleManager.pickDirectory();
@@ -239,17 +226,14 @@ export function SidePanelApp() {
     }
   };
 
-  // Toggle Page Capture
   const handleToggleCapture = async () => {
     setStartError(null);
 
     if (isCapturing) {
-      // Stop
       if (adapterRef.current) {
         await adapterRef.current.stop();
         adapterRef.current = null;
       }
-      // Await any pending capture writes to eliminate storage race before Workbench opens
       if (pendingWritesRef.current.size > 0) {
         await Promise.allSettled(Array.from(pendingWritesRef.current));
       }
@@ -264,19 +248,13 @@ export function SidePanelApp() {
         });
       }
     } else {
-      // Start
       let targetTab = activeTab;
       if (!targetTab?.id && typeof chrome !== 'undefined' && chrome.tabs?.query) {
         try {
           let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
           if (!tabs[0]) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (!tabs[0]) tabs = await chrome.tabs.query({ active: true });
           if (tabs[0]?.id) {
-            targetTab = {
-              id: tabs[0].id,
-              url: tabs[0].url || tabs[0].pendingUrl || '',
-              title: tabs[0].title || '',
-            };
+            targetTab = { id: tabs[0].id, url: tabs[0].url || tabs[0].pendingUrl || '', title: tabs[0].title || '' };
             setActiveTab(targetTab);
           }
         } catch {}
@@ -287,25 +265,13 @@ export function SidePanelApp() {
         return;
       }
 
-      if (
-        targetTab.url &&
-        (targetTab.url.startsWith('chrome://') ||
-          targetTab.url.startsWith('chrome-extension://') ||
-          targetTab.url.startsWith('edge://') ||
-          targetTab.url.startsWith('about:'))
-      ) {
-        setStartError('Cannot capture browser internal pages. Please navigate to a normal web page.');
+      if (targetTab.url?.startsWith('chrome')) {
+        setStartError('Cannot capture browser internal pages.');
         return;
       }
 
       let hostNameClean = 'Active Web Tab';
-      if (targetTab.url) {
-        try {
-          hostNameClean = new URL(targetTab.url).hostname || targetTab.url;
-        } catch {
-          hostNameClean = targetTab.url;
-        }
-      }
+      try { if (targetTab.url) hostNameClean = new URL(targetTab.url).hostname; } catch {}
 
       const sessionId = generateULID();
       const session: CaptureSession = {
@@ -327,14 +293,10 @@ export function SidePanelApp() {
         attachCaptureCallback(sessionId, workspaceManager)
       );
 
-      // Only report capture as active, and only persist the session, once
-      // the service worker has confirmed the hook actually installed —
-      // injection can fail (restricted page, expired activeTab grant, etc.)
-      // and the UI must not claim to be recording when nothing is happening.
       try {
         await adapter.start();
       } catch (err: any) {
-        setStartError(err?.message || 'Failed to start capture on this tab.');
+        setStartError(err?.message || 'Failed to start capture.');
         return;
       }
 
@@ -345,17 +307,21 @@ export function SidePanelApp() {
     }
   };
 
-  // One-shot scrape of whatever table/grid is on the page right now.
-  // Independent of Start/Stop Capture (network capture) — a user may want
-  // one without the other. Reuses the active capture session if one is
-  // already running, so both capture modes land in the same session; if
-  // there's no active session yet, this creates a lightweight one so the
-  // scrape still lands in the workspace and shows up when the Workbench
-  // hydrates it.
   const handleScrapeTable = async () => {
     setScrapeStatus(null);
+    let targetTab = activeTab;
+    if (!targetTab?.id && typeof chrome !== 'undefined' && chrome.tabs?.query) {
+      try {
+        let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!tabs[0]) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs[0]?.id) {
+          targetTab = { id: tabs[0].id, url: tabs[0].url || tabs[0].pendingUrl || '', title: tabs[0].title || '' };
+          setActiveTab(targetTab);
+        }
+      } catch {}
+    }
 
-    if (!activeTab?.id) {
+    if (!targetTab?.id) {
       setScrapeStatus({ message: 'Please open an active web page tab first.', tone: 'error' });
       return;
     }
@@ -366,9 +332,9 @@ export function SidePanelApp() {
       if (!session) {
         session = {
           session_id: generateULID(),
-          name: `Table Scrape: ${hostName}`,
+          name: `Table Scrape: ${hostName || 'Active Tab'}`,
           started_at: new Date().toISOString(),
-          initial_page_url: activeTab.url ? redactQueryParams(activeTab.url).sanitizedUrl : '',
+          initial_page_url: targetTab.url ? redactQueryParams(targetTab.url).sanitizedUrl : '',
           navigation_history: [],
           capture_count: 0,
           body_bytes: 0,
@@ -379,43 +345,103 @@ export function SidePanelApp() {
         await workspaceManager.saveSession(session);
       }
 
-      const outcome = await captureTableFromActiveTab(session.session_id, activeTab.id);
+      const outcome = await captureTableFromActiveTab(session.session_id, targetTab.id);
       if (!outcome) {
-        setScrapeStatus({ message: 'No table or grid found on this page.', tone: 'error' });
+        setScrapeStatus({ message: 'No HTML table or grid found on this page.', tone: 'error' });
         return;
       }
 
       setCaptureCount(prev => prev + 1);
       setTotalBytes(prev => prev + (outcome.capture.response.body_size || 0));
-      for (const cand of outcome.candidates) {
-        setDetectedCollections(prev => {
-          const next = new Map(prev);
-          const cur = next.get(cand.suggested_name) || 0;
-          next.set(cand.suggested_name, cur + cand.row_count);
-          return next;
-        });
+
+      if (outcome.body?.rows && outcome.body.rows.length > 0) {
+        const tableName = outcome.candidates[0]?.suggested_name || 'scraped_table';
+        setDiscoveredItems(prev => [
+          {
+            name: tableName,
+            rowCount: outcome.rowCount,
+            source: outcome.strategy === 'table' ? 'DOM Table' : 'Virtualized Grid',
+            rows: outcome.body.rows,
+          },
+          ...prev.filter(x => x.name !== tableName),
+        ]);
       }
+
       await workspaceManager.saveCapture(session.session_id, outcome.capture, outcome.body);
 
       if (outcome.incomplete) {
         setScrapeStatus({
-          message: `Captured ${outcome.rowCount} of ~${outcome.expectedRowCount} rows. This grid didn't respond to scrolling, so the scrape is likely partial — scroll through it manually first, then scrape again.`,
+          message: `Captured ${outcome.rowCount} of ~${outcome.expectedRowCount} rows (scroll manually to load more).`,
           tone: 'warning',
         });
       } else {
         setScrapeStatus({
-          message: `Captured ${outcome.rowCount} rows (${outcome.strategy === 'table' ? 'plain table' : 'virtualized grid'}).`,
+          message: `Scraped ${outcome.rowCount} rows (${outcome.strategy === 'table' ? 'HTML Table' : 'Grid'}).`,
           tone: 'success',
         });
       }
     } catch (err: any) {
-      setScrapeStatus({ message: err?.message || 'Failed to scrape this page.', tone: 'error' });
+      setScrapeStatus({ message: err?.message || 'Failed to scrape table.', tone: 'error' });
     } finally {
       setIsScraping(false);
     }
   };
 
-  // Open Full Workbench in a browser tab
+  const handleExportCsv = (item: DiscoveredItem) => {
+    if (!item.rows || item.rows.length === 0) return;
+    const headers = Object.keys(item.rows[0]);
+    const escapeCsv = (val: any) => {
+      if (val === null || val === undefined) return '';
+      const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+      return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+    const csvContent = [
+      headers.map(escapeCsv).join(','),
+      ...item.rows.map(row => headers.map(h => escapeCsv(row[h])).join(',')),
+    ].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${item.name}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleCopyJson = (item: DiscoveredItem) => {
+    navigator.clipboard.writeText(JSON.stringify(item.rows, null, 2));
+    setCopiedName(item.name);
+    setTimeout(() => setCopiedName(null), 2000);
+  };
+
+  const handleLoadSampleData = () => {
+    const sampleOrders: DiscoveredItem = {
+      name: 'orders',
+      rowCount: 5,
+      source: 'Sample Data',
+      rows: [
+        { id: 'ORD-1001', customer: 'Alice Smith', email: 'alice@example.com', items_count: 3, total_amount: 149.99, status: 'completed' },
+        { id: 'ORD-1002', customer: 'Bob Jones', email: 'bob@example.com', items_count: 1, total_amount: 49.50, status: 'shipped' },
+        { id: 'ORD-1003', customer: 'Charlie Brown', email: 'charlie@example.com', items_count: 5, total_amount: 320.00, status: 'processing' },
+        { id: 'ORD-1004', customer: 'Diana Prince', email: 'diana@example.com', items_count: 2, total_amount: 89.90, status: 'completed' },
+        { id: 'ORD-1005', customer: 'Evan Wright', email: 'evan@example.com', items_count: 4, total_amount: 210.25, status: 'pending' },
+      ],
+    };
+    const sampleProducts: DiscoveredItem = {
+      name: 'products',
+      rowCount: 4,
+      source: 'Sample Data',
+      rows: [
+        { id: 'PROD-101', name: 'Wireless Keyboard', category: 'Hardware', in_stock: true, unit_price: 129.99 },
+        { id: 'PROD-102', name: 'Ultra-Wide 4K Monitor', category: 'Hardware', in_stock: true, unit_price: 499.00 },
+        { id: 'PROD-103', name: 'Standing Desk', category: 'Furniture', in_stock: false, unit_price: 650.00 },
+        { id: 'PROD-104', name: 'Dual 4K Dock', category: 'Accessories', in_stock: true, unit_price: 89.50 },
+      ],
+    };
+    setDiscoveredItems([sampleOrders, sampleProducts]);
+    setCaptureCount(prev => prev + 2);
+  };
+
   const handleOpenWorkbench = () => {
     if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
       chrome.tabs.create({ url: chrome.runtime.getURL('workbench.html') });
@@ -424,314 +450,124 @@ export function SidePanelApp() {
     }
   };
 
-  const isRestrictedPage =
-    !activeTab?.url ||
-    activeTab.url.startsWith('chrome://') ||
-    activeTab.url.startsWith('chrome-extension://') ||
-    activeTab.url.startsWith('edge://') ||
-    activeTab.url.startsWith('about:');
-
-  const hostName = activeTab?.url && !isRestrictedPage
-    ? (() => {
-        try {
-          return new URL(activeTab.url).hostname;
-        } catch {
-          return activeTab.url;
-        }
-      })()
-    : null;
+  const isRestrictedPage = !activeTab?.url || activeTab.url.startsWith('chrome');
+  const hostName = activeTab?.url && !isRestrictedPage ? (() => { try { return new URL(activeTab.url).hostname; } catch { return activeTab.url; } })() : null;
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        background: colors.bg,
-        fontFamily: fonts.body,
-        color: colors.text,
-        padding: 16,
-        userSelect: 'none',
-      }}
-    >
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: colors.bg, fontFamily: fonts.body, color: colors.text, padding: 16, userSelect: 'none', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: 6,
-              background: 'linear-gradient(135deg, #0284c7, #8b5cf6)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontWeight: 800,
-              fontSize: 12,
-              color: '#ffffff',
-            }}
-          >
-            W
-          </div>
-          <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.02em' }}>WireData</span>
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: 'linear-gradient(135deg, #0284c7, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, color: '#ffffff' }}>W</div>
+          <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.02em' }}>WireData</span>
+          <span style={{ fontSize: 10, color: colors.textDim, fontFamily: fonts.mono }}>v{appVersion}</span>
         </div>
-        <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>v{appVersion}</span>
+        <button onClick={handleLoadSampleData} title="Instantly load sample datasets for testing" style={{ background: `${colors.accent}18`, border: `1px solid ${colors.accent}44`, color: colors.accent, borderRadius: 6, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>⚡ Sample Data</button>
       </div>
 
-      {/* Target Tab Host Card */}
-      <div
-        style={{
-          background: colors.cardBg,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 8,
-          padding: 12,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ fontSize: 11, color: colors.textDim, textTransform: 'uppercase', fontWeight: 600, marginBottom: 4 }}>
-          Target Page
-        </div>
+      <div style={{ background: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 10, marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: colors.textDim, textTransform: 'uppercase', fontWeight: 700, marginBottom: 2 }}>Target Page</div>
         {hostName ? (
-          <div style={{ fontSize: 14, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>
-            {hostName}
-          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>{hostName}</div>
         ) : (
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: colors.warning }}>
-              ⚠️ No Active Web Page
-            </div>
-            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>
-              Open any website and click the WireData toolbar icon (W).
-            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: colors.warning }}>⚠️ No Active Web Page</div>
+            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>Open any website to record JSON traffic.</div>
           </div>
         )}
       </div>
 
-      {/* Status & Privacy Banner */}
-      <div
-        style={{
-          background: isCapturing ? `${colors.error}11` : colors.panelBg,
-          border: `1px solid ${isCapturing ? colors.error : colors.borderLight}`,
-          borderRadius: 10,
-          padding: 16,
-          marginBottom: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: isCapturing ? colors.error : colors.textDim,
-              boxShadow: isCapturing ? `0 0 10px ${colors.error}` : 'none',
-            }}
-          />
-          <span style={{ fontWeight: 700, fontSize: 13, color: isCapturing ? colors.error : colors.textMuted }}>
-            {isCapturing ? '● CAPTURING THIS TAB' : '○ CAPTURE OFF'}
-          </span>
-        </div>
-
-        <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
-          {isCapturing
-            ? 'Recording JSON fetch & XHR responses. Request authentication headers are not stored. Credential-like URL parameters are redacted before storage. JSON response bodies are stored as returned and may contain sensitive information. All processing stays strictly on your device.'
-            : 'Capture is off. When started, WireData will locally record JSON API responses and sanitized request URLs from this tab. Request authentication headers are not stored.'}
-        </p>
-
-        {isCapturing && (
-          <div style={{ display: 'flex', gap: 16, fontSize: 12, fontFamily: fonts.mono, color: colors.text }}>
-            <div>
-              <strong style={{ color: colors.primaryLight }}>{captureCount}</strong> responses
-            </div>
-            <div>
-              <strong style={{ color: colors.primaryLight }}>{(totalBytes / 1024).toFixed(1)}</strong> KB
-            </div>
+      <div style={{ background: isCapturing ? `${colors.error}11` : colors.panelBg, border: `1px solid ${isCapturing ? colors.error : colors.borderLight}`, borderRadius: 10, padding: 14, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: isCapturing ? colors.error : colors.textDim, boxShadow: isCapturing ? `0 0 10px ${colors.error}` : 'none' }} />
+            <span style={{ fontWeight: 700, fontSize: 12, color: isCapturing ? colors.error : colors.textMuted }}>{isCapturing ? '● CAPTURING THIS TAB' : '○ CAPTURE OFF'}</span>
           </div>
-        )}
-
+          {isCapturing && (
+            <div style={{ display: 'flex', gap: 10, fontSize: 11, fontFamily: fonts.mono, color: colors.text }}>
+              <div><strong style={{ color: colors.primaryLight }}>{captureCount}</strong> reqs</div>
+              <div><strong style={{ color: colors.primaryLight }}>{(totalBytes / 1024).toFixed(1)}</strong> KB</div>
+            </div>
+          )}
+        </div>
         {startError && (
-          <div
-            style={{
-              fontSize: 12,
-              color: colors.error,
-              background: `${colors.error}11`,
-              border: `1px solid ${colors.error}44`,
-              borderRadius: 6,
-              padding: '8px 10px',
-            }}
-          >
-            {startError}
-          </div>
+          <div style={{ fontSize: 11, color: colors.error, background: `${colors.error}11`, border: `1px solid ${colors.error}44`, borderRadius: 6, padding: '6px 8px' }}>{startError}</div>
         )}
-
-        <button
-          onClick={handleToggleCapture}
-          style={{
-            background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '10px 16px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
-          }}
-        >
-          {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
-        </button>
-        {!hasPersistentWorkspace && !isCapturing && (
-          <p style={{ margin: 0, fontSize: 11, color: colors.textDim, lineHeight: 1.4 }}>
-            💡 Pick a folder below to save captures to disk between sessions.
-          </p>
-        )}
+        <button onClick={handleToggleCapture} style={{ background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)', color: '#ffffff', border: 'none', borderRadius: 6, padding: '10px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)' }}>{isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}</button>
       </div>
 
-      {/* Scrape Visible Table / Grid — one-shot, independent of Start/Stop Capture */}
-      <div
-        style={{
-          background: colors.panelBg,
-          border: `1px solid ${colors.borderLight}`,
-          borderRadius: 10,
-          padding: 16,
-          marginBottom: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-        }}
-      >
-        <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape Table on Page</div>
-        <p style={{ margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.5 }}>
-          Takes a one-time snapshot of the visible HTML table or grid on this page. Page URLs are sanitized.
-          Data is processed and stored locally on your device.
-        </p>
-
-        {scrapeStatus && (
-          <div
-            style={{
-              fontSize: 12,
-              color:
-                scrapeStatus.tone === 'error'
-                  ? colors.error
-                  : scrapeStatus.tone === 'warning'
-                    ? colors.warning
-                    : colors.success,
-              background:
-                scrapeStatus.tone === 'error'
-                  ? `${colors.error}11`
-                  : scrapeStatus.tone === 'warning'
-                    ? `${colors.warning}11`
-                    : `${colors.success}11`,
-              border: `1px solid ${
-                scrapeStatus.tone === 'error' ? colors.error : scrapeStatus.tone === 'warning' ? colors.warning : colors.success
-              }44`,
-              borderRadius: 6,
-              padding: '8px 10px',
-            }}
-          >
-            {scrapeStatus.message}
-          </div>
-        )}
-
-        <button
-          onClick={handleScrapeTable}
-          disabled={isScraping}
-          style={{
-            background: colors.cardBg,
-            color: colors.text,
-            border: `1px solid ${colors.borderLight}`,
-            borderRadius: 6,
-            padding: '10px 16px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: isScraping ? 'not-allowed' : 'pointer',
-            opacity: isScraping ? 0.7 : 1,
-          }}
-        >
-          {isScraping ? 'Scraping…' : '🔲 Scrape Table'}
-        </button>
-      </div>
-
-      {/* Detected Datasets Section */}
-      <div style={{ flex: 1, overflowY: 'auto', marginBottom: 16 }}>
-        <div style={{ fontSize: 11, color: colors.textDim, textTransform: 'uppercase', fontWeight: 600, marginBottom: 8 }}>
-          Discovered Datasets ({detectedCollections.size})
-        </div>
-
-        {detectedCollections.size === 0 ? (
-          <div style={{ padding: 16, textAlign: 'center', color: colors.textDim, fontSize: 12, background: colors.cardBg, borderRadius: 6 }}>
-            {isCapturing ? 'Listening for JSON collections...' : 'Start capture and browse to discover datasets.'}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {Array.from(detectedCollections.entries()).map(([name, rows]) => (
-              <div
-                key={name}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  background: colors.cardBg,
-                  border: `1px solid ${colors.border}`,
-                  borderRadius: 6,
-                  padding: '8px 12px',
-                  fontSize: 12,
-                }}
-              >
-                <span style={{ fontWeight: 600, color: colors.primaryLight }}>{name}</span>
-                <span style={{ fontFamily: fonts.mono, color: colors.textMuted }}>{rows.toLocaleString()} rows</span>
+      {discoveredItems.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, marginBottom: 8, letterSpacing: '0.04em' }}>📦 Discovered Collections ({discoveredItems.length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {discoveredItems.map(item => (
+              <div key={item.name} style={{ background: colors.cardBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>{item.name}</span>
+                    <span style={{ marginLeft: 6, fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>{item.rowCount} rows</span>
+                  </div>
+                  <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setPreviewItem(item)} style={{ flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.text, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>👁️ Preview</button>
+                  <button onClick={() => handleExportCsv(item)} style={{ flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.success, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>💾 CSV</button>
+                  <button onClick={() => handleCopyJson(item)} style={{ flex: 1, background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: copiedName === item.name ? colors.success : colors.textMuted, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{copiedName === item.name ? '✓ Copied' : '📋 JSON'}</button>
+                </div>
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      <div style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape HTML Table</div>
+          <button onClick={handleScrapeTable} disabled={isScraping} style={{ background: colors.cardBg, color: colors.text, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: isScraping ? 'not-allowed' : 'pointer' }}>{isScraping ? 'Scraping…' : 'Scrape Now'}</button>
+        </div>
+        {scrapeStatus && (
+          <div style={{ fontSize: 11, color: scrapeStatus.tone === 'error' ? colors.error : scrapeStatus.tone === 'warning' ? colors.warning : colors.success, background: `${scrapeStatus.tone === 'error' ? colors.error : scrapeStatus.tone === 'warning' ? colors.warning : colors.success}11`, borderRadius: 4, padding: '6px 8px' }}>{scrapeStatus.message}</div>
         )}
       </div>
 
-      {/* Workspace & Launch Actions */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <button
-          onClick={handleSelectWorkspace}
-          style={{
-            background: colors.cardBg,
-            color: colors.text,
-            border: `1px solid ${colors.borderLight}`,
-            borderRadius: 6,
-            padding: '8px 12px',
-            fontSize: 12,
-            fontWeight: 500,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <span>📁 {workspaceName}</span>
-          <span style={{ fontSize: 10, color: colors.primaryLight }}>Change</span>
-        </button>
-
-        <button
-          onClick={handleOpenWorkbench}
-          style={{
-            background: colors.hoverBg,
-            color: colors.primaryLight,
-            border: `1px solid ${colors.primary}66`,
-            borderRadius: 6,
-            padding: '10px 16px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-          }}
-        >
-          <span>Open Full Workbench</span>
-          <span>↗</span>
+      <div style={{ marginTop: 'auto', paddingTop: 10 }}>
+        <button onClick={handleOpenWorkbench} style={{ width: '100%', background: 'linear-gradient(135deg, #1e293b, #0f172a)', border: `1px solid ${colors.border}`, borderRadius: 8, padding: '12px 14px', color: '#f8fafc', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}><span>Open Full SQL Workbench</span><span>↗</span></div>
+          <span style={{ fontSize: 10, color: colors.textDim }}>For multi-table joins, DuckDB SQL queries, and dataset lineage</span>
         </button>
       </div>
+
+      {previewItem && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', flexDirection: 'column', zIndex: 1000, padding: 12 }}>
+          <div style={{ background: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 10, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            <div style={{ padding: '12px 14px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <strong style={{ fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>{previewItem.name}</strong>
+                <span style={{ fontSize: 11, color: colors.textDim, marginLeft: 8 }}>({previewItem.rowCount} rows)</span>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => handleExportCsv(previewItem)} style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.success, borderRadius: 4, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>💾 CSV</button>
+                <button onClick={() => setPreviewItem(null)} style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, color: colors.text, borderRadius: 4, padding: '4px 8px', fontSize: 11, cursor: 'pointer' }}>✕</button>
+              </div>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+              {previewItem.rows.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: fonts.mono }}>
+                  <thead>
+                    <tr>{Object.keys(previewItem.rows[0]).map(h => <th key={h} style={{ background: colors.panelBg, padding: '6px 8px', border: `1px solid ${colors.border}`, textAlign: 'left', color: colors.textDim, position: 'sticky', top: 0, zIndex: 1 }}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {previewItem.rows.map((row, idx) => (
+                      <tr key={idx} style={{ background: idx % 2 === 0 ? 'transparent' : `${colors.panelBg}44` }}>
+                        {Object.keys(previewItem.rows[0]).map(h => <td key={h} style={{ padding: '5px 8px', border: `1px solid ${colors.borderLight}`, color: colors.text, whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{typeof row[h] === 'object' ? JSON.stringify(row[h]) : String(row[h] ?? '')}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <div style={{ padding: 20, textAlign: 'center', color: colors.textDim, fontSize: 12 }}>No rows in this collection.</div>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

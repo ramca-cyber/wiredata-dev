@@ -238,7 +238,13 @@ async function stopCaptureForTab(tabId: number): Promise<void> {
   }
 }
 
-// 1. Action click: explicitly configure tab-specific side panel and open it
+// 1. Configure default side panel behavior to open directly on action left-click
+chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
+});
+
+// Action click fallback
 chrome.action.onClicked.addListener(async tab => {
   if (tab.id) {
     try {
