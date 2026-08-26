@@ -744,14 +744,27 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     }
   };
 
-  const handleDeleteCapture = (captureId: ULID) => {
+  const handleDeleteCapture = async (captureId: ULID) => {
     setCaptures(prev => prev.filter(c => c.capture_id !== captureId));
     setCandidatesList(prev => prev.filter(item => item.capture.capture_id !== captureId));
+    if (activeSession) {
+      try {
+        await workspaceManager.deleteCapture(activeSession.session_id, captureId);
+      } catch {}
+    }
   };
 
-  const handleClearCaptures = () => {
+  const handleClearCaptures = async () => {
+    const capsToDel = [...captures];
     setCaptures([]);
     setCandidatesList([]);
+    if (activeSession) {
+      for (const c of capsToDel) {
+        try {
+          await workspaceManager.deleteCapture(activeSession.session_id, c.capture_id);
+        } catch {}
+      }
+    }
   };
 
   const handleClearAllDatasets = () => {
@@ -764,9 +777,17 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     setCandidatesList([]);
   };
 
-  const handleDismissRouteGroup = (routeCaptures: CapturedRequest[]) => {
+  const handleDismissRouteGroup = async (routeCaptures: CapturedRequest[]) => {
     const captureIds = new Set(routeCaptures.map(c => c.capture_id));
     setCandidatesList(prev => prev.filter(item => !captureIds.has(item.capture.capture_id)));
+    setCaptures(prev => prev.filter(c => !captureIds.has(c.capture_id)));
+    if (activeSession) {
+      for (const c of routeCaptures) {
+        try {
+          await workspaceManager.deleteCapture(activeSession.session_id, c.capture_id);
+        } catch {}
+      }
+    }
   };
 
   const handleDismissCandidate = (captureId: ULID, pointer: string) => {

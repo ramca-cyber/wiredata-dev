@@ -613,19 +613,28 @@ export function SidePanelApp() {
     }
   };
 
-  const handleClearAllItems = () => {
-    if (viewScope === 'current') {
-      setDiscoveredItems([]);
-      setCaptureCount(0);
-      setTotalBytes(0);
-    } else {
-      setAllHistoryItems([]);
-    }
+  const handleClearAllItems = async () => {
+    setDiscoveredItems([]);
+    setAllHistoryItems([]);
+    setCaptureCount(0);
+    setTotalBytes(0);
+    setScrapeStatus(null);
+    setPreviewItem(null);
+    try {
+      if (activeSession) {
+        const caps = await workspaceManager.listCaptures(activeSession.session_id);
+        for (const c of caps) {
+          await workspaceManager.deleteCapture(activeSession.session_id, c.capture_id);
+        }
+      }
+    } catch {}
   };
 
   const handleRemoveItem = (name: string) => {
     setDiscoveredItems(prev => prev.filter(x => x.name !== name));
     setAllHistoryItems(prev => prev.filter(x => x.name !== name));
+    if (previewItem?.name === name) setPreviewItem(null);
+    setScrapeStatus(null);
   };
 
   const handleLoadSampleData = () => {

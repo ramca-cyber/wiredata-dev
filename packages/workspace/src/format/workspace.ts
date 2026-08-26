@@ -379,6 +379,10 @@ export class WorkspaceManager implements IWorkspaceStorage {
     return captures.sort((a, b) => new Date(a.timing.started_at).getTime() - new Date(b.timing.started_at).getTime());
   }
 
+  async deleteCapture(sessionId: ULID, captureId: ULID): Promise<void> {
+    await this.adapter.deleteFile(`sessions/${sessionId}/captures/${captureId}.json`);
+  }
+
   async getBodyObject(bodyHash: string): Promise<unknown | null> {
     const content = await this.adapter.readFile(`objects/${bodyHash}.json`);
     if (!content) return null;

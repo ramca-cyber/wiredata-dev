@@ -31,6 +31,7 @@ export interface IWorkspaceStorage {
 
   saveCapture(sessionId: ULID, capture: CapturedRequest, rawBody?: unknown): Promise<void>;
   listCaptures(sessionId: ULID): Promise<CapturedRequest[]>;
+  deleteCapture(sessionId: ULID, captureId: ULID): Promise<void>;
   getBodyObject(bodyHash: string): Promise<unknown | null>;
 
   saveDatasetDefinition(definition: DatasetDefinition): Promise<void>;
