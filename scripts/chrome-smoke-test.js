@@ -4,9 +4,10 @@
  * 1. Extracts the exact release ZIP artifact into a clean directory.
  * 2. Launches real headless Chrome with --load-extension.
  * 3. Connects via Chrome DevTools Protocol (CDP):
- *    - Verifies the MV3 extension is registered and discovers its extension ID.
+ *    - Verifies the MV3 extension is registered and discovers its extension ID (fails closed if missing).
  *    - Opens `workbench.html` and `sidepanel.html` targets.
- *    - Connects to target WebSockets, listens for Runtime exceptions and CSP errors.
+ *    - Connects to target WebSockets, listens for Runtime exceptions, console.error calls, and CSP errors.
+ *    - Asserts DuckDB is in ACTIVE state in Workbench.
  *    - Verifies DOM mounting and absence of runtime errors.
  */
 
@@ -111,8 +112,8 @@ const cleanup = () => {
   }, 1000);
 };
 
-// CDP WebSocket Helper using Node native WebSocket (Node 22+)
-function inspectTargetWs(wsUrl, pageName) {
+// CDP WebSocket Helper using Node native WebSocket
+function inspectTargetWs(wsUrl, pageName, { requireDuckDb = false } = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     const errors = [];
@@ -130,37 +131,52 @@ function inspectTargetWs(wsUrl, pageName) {
     const timeout = setTimeout(() => {
       ws.close();
       reject(new Error(`Timeout inspecting ${pageName}`));
-    }, 8000);
+    }, 10000);
 
     ws.onopen = async () => {
       try {
         await send('Runtime.enable');
         await send('Log.enable');
 
-        // Evaluate DOM & App state after 1.5s
-        await new Promise(r => setTimeout(r, 1500));
+        // Allow React and DuckDB client time to complete in-browser initialization
+        let readyState = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          await new Promise(r => setTimeout(r, 250));
 
-        const evalRes = await send('Runtime.evaluate', {
-          expression: `JSON.stringify({
-            title: document.title,
-            hasRootChildren: (document.getElementById('root')?.childElementCount || 0) > 0,
-            bodyTextLength: document.body.innerText.length,
-            hasErrorElements: !!document.querySelector('.error-banner')
-          })`,
-          returnByValue: true,
-        });
+          const evalRes = await send('Runtime.evaluate', {
+            expression: `JSON.stringify({
+              title: document.title,
+              hasRootChildren: (document.getElementById('root')?.childElementCount || 0) > 0,
+              bodyTextLength: document.body.innerText.length,
+              duckdbState: document.querySelector('[data-testid="duckdb-status"]')?.getAttribute('data-state') || null,
+              hasErrorElements: !!document.querySelector('.error-banner')
+            })`,
+            returnByValue: true,
+          });
 
-        const state = JSON.parse(evalRes.result?.value || '{}');
+          const state = JSON.parse(evalRes.result?.value || '{}');
+          if (requireDuckDb) {
+            if (state.duckdbState === 'active') {
+              readyState = state;
+              break;
+            }
+          } else if (state.hasRootChildren) {
+            readyState = state;
+            break;
+          }
+        }
 
         clearTimeout(timeout);
         ws.close();
 
         if (errors.length > 0) {
-          reject(new Error(`Runtime errors on ${pageName}: ${errors.join(', ')}`));
-        } else if (!state.hasRootChildren) {
-          reject(new Error(`${pageName} mounted empty #root element`));
+          reject(new Error(`Runtime/Console errors on ${pageName}: ${errors.join('; ')}`));
+        } else if (!readyState || !readyState.hasRootChildren) {
+          reject(new Error(`${pageName} mounted empty #root element or failed to render`));
+        } else if (requireDuckDb && readyState.duckdbState !== 'active') {
+          reject(new Error(`${pageName} DuckDB status is '${readyState.duckdbState}', expected 'active'`));
         } else {
-          resolve(state);
+          resolve(readyState);
         }
       } catch (err) {
         clearTimeout(timeout);
@@ -182,6 +198,11 @@ function inspectTargetWs(wsUrl, pageName) {
         const desc = data.params?.exceptionDetails?.text || 'Uncaught exception';
         const stack = data.params?.exceptionDetails?.exception?.description || '';
         errors.push(`${desc} ${stack}`);
+      }
+
+      if (data.method === 'Runtime.consoleAPICalled' && data.params?.type === 'error') {
+        const msg = (data.params.args || []).map(a => a.value || a.description || '').join(' ');
+        errors.push(`Console.error: ${msg}`);
       }
 
       if (data.method === 'Log.entryAdded' && data.params?.entry?.level === 'error') {
@@ -219,67 +240,52 @@ async function runSmokeTest() {
 
   console.log(`  ✓ Chrome CDP responsive. Inspecting targets...`);
 
-  // 2. Discover Extension ID from service worker target or inspectable targets
+  // 2. Discover Extension ID from service worker or loaded targets
   let extensionId = null;
-  for (const t of targets) {
-    const match = t.url?.match(/chrome-extension:\/\/([a-z0-9]+)/);
-    if (match) {
-      extensionId = match[1];
-      console.log(`  ✓ Discovered loaded WireData extension target: ${t.url} (ID: ${extensionId})`);
-      break;
-    }
-  }
-
-  // If service worker wasn't in json/list initially, create an extension target to discover ID
-  if (!extensionId) {
-    // Attempt to discover from chrome://extensions or create target
-    console.log(`  🔍 Querying CDP version for browser context...`);
-    // Wait an additional second for MV3 background service worker registration
-    await new Promise(r => setTimeout(r, 1000));
-    const updated = await (await fetch(`${cdpBase}/json/list`)).json();
-    for (const t of updated) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const currentTargets = await (await fetch(`${cdpBase}/json/list`)).json();
+    for (const t of currentTargets) {
       const match = t.url?.match(/chrome-extension:\/\/([a-z0-9]+)/);
       if (match) {
         extensionId = match[1];
-        console.log(`  ✓ Discovered WireData extension ID: ${extensionId}`);
+        console.log(`  ✓ Discovered loaded WireData extension target: ${t.url} (ID: ${extensionId})`);
         break;
       }
     }
+    if (extensionId) break;
+    await new Promise(r => setTimeout(r, 300));
   }
 
+  // Fails closed unconditionally if extension ID was not found
   if (!extensionId) {
-    // Fallback: If headless Chrome did not list extension target in json/list directly,
-    // open the known manifest-specified options/workbench url to determine runtime mount
-    console.log(`  ℹ️ Querying targets list...`);
+    throw new Error('WireData extension target not found in Chrome CDP. Extension failed to load.');
   }
 
-  // 3. Test Workbench Page
-  if (extensionId) {
-    console.log(`\n📄 Testing Workbench Page (chrome-extension://${extensionId}/workbench.html)...`);
-    const wbTargetRes = await fetch(`${cdpBase}/json/new?chrome-extension://${extensionId}/workbench.html`, { method: 'PUT' });
-    const wbTarget = await wbTargetRes.json();
-    
-    if (!wbTarget.webSocketDebuggerUrl) {
-      throw new Error('Failed to create CDP debugger for workbench.html');
-    }
-
-    const wbState = await inspectTargetWs(wbTarget.webSocketDebuggerUrl, 'workbench.html');
-    console.log(`  ✓ workbench.html rendered cleanly without exceptions (Title: "${wbState.title}", text length: ${wbState.bodyTextLength} chars)`);
-
-    // 4. Test Side Panel Page
-    console.log(`\n📱 Testing Side Panel Page (chrome-extension://${extensionId}/sidepanel.html)...`);
-    const spTargetRes = await fetch(`${cdpBase}/json/new?chrome-extension://${extensionId}/sidepanel.html`, { method: 'PUT' });
-    const spTarget = await spTargetRes.json();
-    
-    if (!spTarget.webSocketDebuggerUrl) {
-      throw new Error('Failed to create CDP debugger for sidepanel.html');
-    }
-
-    const spState = await inspectTargetWs(spTarget.webSocketDebuggerUrl, 'sidepanel.html');
-    console.log(`  ✓ sidepanel.html rendered cleanly without exceptions (Title: "${spState.title}", text length: ${spState.bodyTextLength} chars)`);
+  // 3. Test Workbench Page with DuckDB Active Assertion
+  console.log(`\n📄 Testing Workbench Page (chrome-extension://${extensionId}/workbench.html)...`);
+  const wbTargetRes = await fetch(`${cdpBase}/json/new?chrome-extension://${extensionId}/workbench.html`, { method: 'PUT' });
+  const wbTarget = await wbTargetRes.json();
+  
+  if (!wbTarget.webSocketDebuggerUrl) {
+    throw new Error('Failed to create CDP debugger for workbench.html');
   }
 
-  console.log(`\n✅ Deep Chrome Smoke Test PASSED: Release ZIP v${version} installed, rendered UI pages, and ran without runtime exceptions or CSP violations.\n`);
+  const wbState = await inspectTargetWs(wbTarget.webSocketDebuggerUrl, 'workbench.html', { requireDuckDb: true });
+  console.log(`  ✓ workbench.html rendered cleanly (Title: "${wbState.title}", DuckDB State: "${wbState.duckdbState}")`);
+
+  // 4. Test Side Panel Page
+  console.log(`\n📱 Testing Side Panel Page (chrome-extension://${extensionId}/sidepanel.html)...`);
+  const spTargetRes = await fetch(`${cdpBase}/json/new?chrome-extension://${extensionId}/sidepanel.html`, { method: 'PUT' });
+  const spTarget = await spTargetRes.json();
+  
+  if (!spTarget.webSocketDebuggerUrl) {
+    throw new Error('Failed to create CDP debugger for sidepanel.html');
+  }
+
+  const spState = await inspectTargetWs(spTarget.webSocketDebuggerUrl, 'sidepanel.html', { requireDuckDb: false });
+  console.log(`  ✓ sidepanel.html rendered cleanly without exceptions (Title: "${spState.title}", text length: ${spState.bodyTextLength} chars)`);
+
+  console.log(`\n✅ Deep Chrome Smoke Test PASSED: Release ZIP v${version} installed, verified DuckDB ACTIVE, rendered UI pages, and ran with zero runtime exceptions or console errors.\n`);
 }
 
 runSmokeTest()

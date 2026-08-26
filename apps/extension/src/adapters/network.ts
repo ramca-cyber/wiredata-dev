@@ -66,8 +66,11 @@ export class ChromeNetworkCaptureAdapter {
     if (!isJsonMime) return;
 
     const { sanitizedUrl, params } = redactQueryParams(request.url || '');
-    const rawReqBody = request.postData?.text;
-    const graphqlOp = rawReqBody ? extractGraphQLOperation(rawReqBody) : undefined;
+    let graphqlOp: string | undefined;
+    try {
+      const parsed = new URL(request.url || '');
+      graphqlOp = parsed.searchParams.get('operationName') || undefined;
+    } catch {}
     const normalizedRoute = computeNormalizedRoute(request.method || 'GET', sanitizedUrl, graphqlOp);
     const captureId = generateULID();
 

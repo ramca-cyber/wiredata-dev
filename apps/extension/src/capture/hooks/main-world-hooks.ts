@@ -52,20 +52,13 @@ export function installPageCaptureHook(sessionId: string, tabId: number): void {
     }
   }
 
-  function extractGraphQLOperation(body: any): string | undefined {
-    if (!body) return undefined;
-    if (typeof body === 'string') {
-      try {
-        const parsed = JSON.parse(body);
-        return parsed.operationName || undefined;
-      } catch {
-        return undefined;
-      }
+  function extractGraphQLOperationFromUrl(url: string): string | undefined {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return parsed.searchParams.get('operationName') || undefined;
+    } catch {
+      return undefined;
     }
-    if (typeof body === 'object' && body !== null) {
-      return body.operationName || undefined;
-    }
-    return undefined;
   }
 
   if (window.__WIREDATA_HOOK_STATE__) {
@@ -92,7 +85,7 @@ export function installPageCaptureHook(sessionId: string, tabId: number): void {
     const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const sanitized = sanitizeUrl(rawUrl);
     const sanitizedPageUrl = sanitizeUrl(window.location.href);
-    const graphqlOp = extractGraphQLOperation(init?.body);
+    const graphqlOp = extractGraphQLOperationFromUrl(rawUrl);
 
     const response = await nativeFetch.apply(this, [input, init]);
 
@@ -139,7 +132,7 @@ export function installPageCaptureHook(sessionId: string, tabId: number): void {
   const nativeXhrOpen = XMLHttpRequest.prototype.open;
   const nativeXhrSend = XMLHttpRequest.prototype.send;
 
-  const XHR_DATA = Symbol('__wiredata_xhr_data__');
+  const XHR_DATA = '__wiredata_xhr_data__';
 
   XMLHttpRequest.prototype.open = function (this: any, method: string, url: string | URL, ...rest: any[]) {
     const rawUrl = typeof url === 'string' ? url : url.toString();
@@ -157,7 +150,7 @@ export function installPageCaptureHook(sessionId: string, tabId: number): void {
   XMLHttpRequest.prototype.send = function (this: any, body?: Document | XMLHttpRequestBodyInit | null) {
     const data = this[XHR_DATA];
     if (data) {
-      data.graphqlOp = extractGraphQLOperation(body);
+      data.graphqlOp = extractGraphQLOperationFromUrl(data.rawUrl);
 
       this.addEventListener('load', function (this: XMLHttpRequest) {
         try {

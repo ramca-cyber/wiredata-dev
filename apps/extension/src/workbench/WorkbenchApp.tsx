@@ -889,7 +889,22 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
             Network Data Workbench
           </span>
           <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>
-            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6'}
+            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.7'}
+          </span>
+          <span
+            data-testid="duckdb-status"
+            data-state={duckdbStatus.ready ? 'active' : duckdbStatus.error ? 'error' : 'initializing'}
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              background: duckdbStatus.ready ? `${colors.success}22` : duckdbStatus.error ? `${colors.error}22` : `${colors.warning}22`,
+              color: duckdbStatus.ready ? colors.success : duckdbStatus.error ? colors.error : colors.warning,
+              padding: '2px 6px',
+              borderRadius: 4,
+              fontFamily: fonts.mono,
+            }}
+          >
+            {duckdbStatus.ready ? '● DuckDB SQL' : duckdbStatus.error ? '✕ DuckDB Error' : '○ DuckDB Init'}
           </span>
           {hostMode === 'devtools' && (
             <span

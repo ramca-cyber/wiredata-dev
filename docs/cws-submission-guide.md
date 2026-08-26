@@ -63,14 +63,14 @@ Provides the companion user interface alongside the active browser tab, displayi
 
 ### `storage`
 ```text
-Used to persist local workspace metadata, user-configured dataset definitions, and session state locally in the browser. No data is synchronized or uploaded externally.
+Used only for chrome.storage.session to preserve ephemeral active-capture control state—active tab ID, session ID, origin, and capture status—across Manifest V3 service-worker suspension. Captured website content and datasets are not stored through this permission.
 ```
 
 ---
 
 ## 3. Privacy Practices Tab (August 2026 CWS Policy Compliant)
 
-Even though all processing is 100% client-side and never leaves the device, Chrome Web Store policy requires declaring user data categories processed by the extension.
+Even though all processing is 100% client-side and never leaves the device, Chrome Web Store policy requires declaring user data categories processed locally by the extension.
 
 ### A. Data Usage Category Declarations
 
@@ -78,16 +78,21 @@ Even though all processing is 100% client-side and never leaves the device, Chro
 | :--- | :---: | :--- |
 | **Website Content** | **YES** | Intercepted JSON fetch/XHR API responses and extracted DOM table cell text are processed and stored strictly on the user's local device to enable developer inspection, schema inference, and SQL analysis. No data is transmitted to external servers. |
 | **Web Browsing Activity** | **YES** | Request endpoint URLs and target page URLs are recorded locally to provide provenance tracking and route grouping. Query parameters containing sensitive credentials (tokens, keys, secrets) and URL hash fragments are automatically sanitized before local storage. |
-| **Authentication Information** | **NO** | Authorization headers, Cookies, and session tokens are stripped and never stored. |
+| **Authentication Information** | **NO** | Authorization headers, Cookies, session tokens, and HTTP request bodies are never collected, inspected, or stored. |
 | **Personal Communications** | **NO** | Not handled or collected. |
 | **Location / Financial** | **NO** | Not handled or collected. |
 
-### B. Single Purpose Description
+### B. Remote Code Declaration
+```text
+Remote code: NO. All JavaScript, workers, WebAssembly, and DuckDB assets execute from files bundled inside the extension package. No executable code is downloaded from CDNs or external servers.
+```
+
+### C. Single Purpose Description
 ```text
 WireData serves a single developer productivity purpose: inspecting, structuring, and locally querying JSON network traffic and tabular data from authorized web pages.
 ```
 
-### C. Developer Data Certifications
+### D. Developer Data Certifications
 Check the following mandatory certification checkboxes in the CWS dashboard:
 - [x] **I certify that my extension does not sell user data to third parties.**
 - [x] **I certify that my extension does not use or transfer user data for purposes unrelated to the item's single purpose.**
@@ -110,21 +115,23 @@ WireData is a local-only developer workbench for inspecting JSON traffic and HTM
 2. Click the WireData extension icon in the browser toolbar to open the Side Panel.
    (Notice the target tab card immediately binds to the active reviewer page).
 
-3. In the Side Panel, click "⏺ Start Capture".
-   - Click the "Fetch Orders API (Page 1)", "Fetch Orders API (Page 2)", and "Fetch Products API" buttons on the test page.
-   - Observe the live request counters and discovered candidate collections ("orders", "products") appearing in the Side Panel.
-   - Click "TS" or "JSONL" on any collection to verify instant type generation and export.
+3. In the Side Panel, click "⏺ Start Capture" (REC status appears).
 
-4. Test DOM Table Scraping:
-   - Click "📄 Scrape Table" in the Side Panel.
-   - Observe the HTML table on the test page extracted cleanly into a structured dataset.
+4. On the reviewer test page, click "🚀 Generate JSON API Request".
+   - Notice the Side Panel immediately increments to 1 response and detects the "orders" collection.
+   - Click "TS" or "JSONL" on the orders card to verify instant type generation and export.
 
-5. Test the Full Workbench & DuckDB SQL:
-   - Click "Open Full Workbench" in the Side Panel header (or navigate to the Workbench tab).
-   - Click "Datasets" to view the virtualized grid with column type badges.
-   - Click "DuckDB SQL" and run: SELECT * FROM orders; to verify in-browser WebAssembly SQL execution.
+5. Click "⏹ Stop Capture" in the Side Panel.
+
+6. Click "Open Full SQL Workbench ↗" in the Side Panel (or open workbench.html).
+   - In Workbench, switch to the "Candidates" tab and click "⚡ Extract Combined Dataset" to create the "orders" table.
+   - Switch to the "DuckDB SQL" tab and click "Run Query (Ctrl+Enter)" to query SELECT * FROM orders; via DuckDB-WASM.
    - Click "Export CSV" to verify safe spreadsheet download.
 
-6. Local-Only Verification:
-   - Check the DevTools Network tab during all operations: zero outbound requests are sent to external servers or telemetry endpoints. All data and DuckDB WASM run 100% locally.
+7. Test DOM Table Scraping (Optional):
+   - In the Side Panel, click "Scrape Now" under "🔲 Scrape HTML Table".
+   - Observe the HTML table on the test page extracted cleanly into a structured dataset.
+
+8. Local-Only Verification:
+   The reviewer page's own requests are expected and are the traffic WireData captures. WireData sends no captured content, telemetry, or analytics to developer-controlled or third-party services. All data and DuckDB WASM run 100% locally.
 ```

@@ -697,6 +697,9 @@ export function SidePanelApp() {
         {startError && (
           <div style={{ fontSize: 11, color: colors.error, background: `${colors.error}11`, border: `1px solid ${colors.error}44`, borderRadius: 6, padding: '6px 8px' }}>{startError}</div>
         )}
+        <div style={{ fontSize: 10, color: colors.textDim, lineHeight: 1.4 }}>
+          🔒 Captures JSON response bodies and sanitized request/page URLs from this tab only. Stored locally on your device; nothing is sent to WireData. Stop Capture or close the panel to end collection.
+        </div>
         <button onClick={handleToggleCapture} style={{ background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)', color: '#ffffff', border: 'none', borderRadius: 6, padding: '10px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)' }}>{isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}</button>
       </div>
 
@@ -942,7 +945,10 @@ export function SidePanelApp() {
       {/* Scrape HTML Table */}
       <div style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape HTML Table</div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape HTML Table</div>
+            <div style={{ fontSize: 10, color: colors.textDim, marginTop: 2 }}>One-time local extraction of table/grid text from this page.</div>
+          </div>
           <button onClick={handleScrapeTable} disabled={isScraping} style={{ background: colors.cardBg, color: colors.text, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: isScraping ? 'not-allowed' : 'pointer' }}>{isScraping ? 'Scraping…' : 'Scrape Now'}</button>
         </div>
         {scrapeStatus && (

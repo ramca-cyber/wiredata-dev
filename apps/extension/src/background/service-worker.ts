@@ -54,15 +54,13 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
     }
   }
 
-  function extractGraphQLOperation(body: unknown): string | undefined {
-    if (!body) return undefined;
-    if (typeof body === 'string') {
-      try { return (JSON.parse(body) as any).operationName || undefined; } catch { return undefined; }
+  function extractGraphQLOperationFromUrl(url: string): string | undefined {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return parsed.searchParams.get('operationName') || undefined;
+    } catch {
+      return undefined;
     }
-    if (typeof body === 'object' && body !== null) {
-      return (body as any).operationName || undefined;
-    }
-    return undefined;
   }
 
   const w = window as any;
@@ -90,7 +88,7 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
     const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
     const sanitized = sanitizeUrl(rawUrl);
     const sanitizedPageUrl = sanitizeUrl(window.location.href);
-    const graphqlOp = extractGraphQLOperation(init?.body);
+    const graphqlOp = extractGraphQLOperationFromUrl(rawUrl);
 
     const response = await nativeFetch.apply(this, [input, init] as Parameters<typeof fetch>);
 
@@ -156,7 +154,7 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
   XMLHttpRequest.prototype.send = function (this: any, body?: Document | XMLHttpRequestBodyInit | null) {
     const data = this[XHR_KEY];
     if (data) {
-      data.graphqlOp = extractGraphQLOperation(body);
+      data.graphqlOp = extractGraphQLOperationFromUrl(data.rawUrl);
       this.addEventListener('load', function (this: XMLHttpRequest) {
         try {
           const contentType = this.getResponseHeader('content-type');
