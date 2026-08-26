@@ -24,6 +24,7 @@
 function installPageCaptureHook(sessionId: string, tabId: number): void {
   const FETCH_SENTINEL = '__WIREDATA_FETCH_WRAPPER__';
   const XHR_SENTINEL = '__WIREDATA_XHR_WRAPPER__';
+  const MAX_CAPTURE_BYTES = 25 * 1024 * 1024; // 25 MiB ceiling
 
   function isJsonMime(mime: string | null): boolean {
     if (!mime) return false;
@@ -39,6 +40,8 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
   function sanitizeUrl(rawUrl: string): string {
     try {
       const parsed = new URL(rawUrl, window.location.origin);
+      // Strip URL fragments to prevent sensitive token leaks in OAuth/SPA URLs
+      parsed.hash = '';
       const SENSITIVE_PARAMS = ['token', 'auth', 'key', 'secret', 'password', 'apikey', 'api_key', 'access_token'];
       parsed.searchParams.forEach((_val: string, key: string) => {
         if (SENSITIVE_PARAMS.some(p => key.toLowerCase().includes(p))) {
@@ -94,15 +97,41 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
     try {
       const contentType = response.headers.get('content-type');
       if (isJsonMime(contentType)) {
-        response.clone().json().then((jsonBody: unknown) => {
+        response.clone().text().then((rawText: string) => {
           const durationMs = Math.round(performance.now() - startTime);
-          window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
-            sessionId: state.sessionId, tabId: state.tabId, method,
-            url: sanitized, sanitized_url: sanitized, pageUrl: sanitizedPageUrl,
-            status: response.status, statusText: response.statusText,
-            mimeType: contentType || 'application/json', graphqlOperationName: graphqlOp,
-            body: jsonBody, startedAt, completedAt: new Date().toISOString(), durationMs,
-          }}, '*');
+          const bodyBytes = new TextEncoder().encode(rawText).byteLength;
+          if (bodyBytes > MAX_CAPTURE_BYTES) {
+            window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+              sessionId: state.sessionId, tabId: state.tabId, method,
+              url: sanitized, sanitized_url: sanitized, pageUrl: sanitizedPageUrl,
+              status: response.status, statusText: response.statusText,
+              mimeType: contentType || 'application/json', graphqlOperationName: graphqlOp,
+              body: undefined, rawText: undefined, bodySize: bodyBytes, parseStatus: 'skipped_large',
+              startedAt, completedAt: new Date().toISOString(), durationMs,
+            }}, '*');
+            return;
+          }
+
+          try {
+            const jsonBody = JSON.parse(rawText);
+            window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+              sessionId: state.sessionId, tabId: state.tabId, method,
+              url: sanitized, sanitized_url: sanitized, pageUrl: sanitizedPageUrl,
+              status: response.status, statusText: response.statusText,
+              mimeType: contentType || 'application/json', graphqlOperationName: graphqlOp,
+              body: jsonBody, rawText, bodySize: bodyBytes, parseStatus: 'parsed',
+              startedAt, completedAt: new Date().toISOString(), durationMs,
+            }}, '*');
+          } catch {
+            window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+              sessionId: state.sessionId, tabId: state.tabId, method,
+              url: sanitized, sanitized_url: sanitized, pageUrl: sanitizedPageUrl,
+              status: response.status, statusText: response.statusText,
+              mimeType: contentType || 'application/json', graphqlOperationName: graphqlOp,
+              body: undefined, rawText, bodySize: bodyBytes, parseStatus: 'parse_error',
+              startedAt, completedAt: new Date().toISOString(), durationMs,
+            }}, '*');
+          }
         }).catch(() => {});
       }
     } catch {}
@@ -132,18 +161,50 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
         try {
           const contentType = this.getResponseHeader('content-type');
           if (isJsonMime(contentType)) {
-            const jsonBody = this.responseType === 'json' ? this.response
-              : this.responseText ? JSON.parse(this.responseText) : undefined;
-            if (jsonBody !== undefined) {
+            const rawText = this.responseType === '' || this.responseType === 'text'
+              ? this.responseText
+              : typeof this.response === 'string'
+              ? this.response
+              : JSON.stringify(this.response);
+
+            if (rawText !== undefined) {
               const durationMs = Math.round(performance.now() - data.startTime);
-              window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
-                sessionId: state.sessionId, tabId: state.tabId, method: data.method,
-                url: data.sanitizedUrl, sanitized_url: data.sanitizedUrl,
-                pageUrl: sanitizeUrl(window.location.href),
-                status: this.status, statusText: this.statusText,
-                mimeType: contentType || 'application/json', graphqlOperationName: data.graphqlOp,
-                body: jsonBody, startedAt: data.startedAt, completedAt: new Date().toISOString(), durationMs,
-              }}, '*');
+              const bodyBytes = new TextEncoder().encode(rawText).byteLength;
+              if (bodyBytes > MAX_CAPTURE_BYTES) {
+                window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+                  sessionId: state.sessionId, tabId: state.tabId, method: data.method,
+                  url: data.sanitizedUrl, sanitized_url: data.sanitizedUrl,
+                  pageUrl: sanitizeUrl(window.location.href),
+                  status: this.status, statusText: this.statusText,
+                  mimeType: contentType || 'application/json', graphqlOperationName: data.graphqlOp,
+                  body: undefined, rawText: undefined, bodySize: bodyBytes, parseStatus: 'skipped_large',
+                  startedAt: data.startedAt, completedAt: new Date().toISOString(), durationMs,
+                }}, '*');
+                return;
+              }
+
+              try {
+                const jsonBody = typeof this.response === 'object' && this.response !== null ? this.response : JSON.parse(rawText);
+                window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+                  sessionId: state.sessionId, tabId: state.tabId, method: data.method,
+                  url: data.sanitizedUrl, sanitized_url: data.sanitizedUrl,
+                  pageUrl: sanitizeUrl(window.location.href),
+                  status: this.status, statusText: this.statusText,
+                  mimeType: contentType || 'application/json', graphqlOperationName: data.graphqlOp,
+                  body: jsonBody, rawText, bodySize: bodyBytes, parseStatus: 'parsed',
+                  startedAt: data.startedAt, completedAt: new Date().toISOString(), durationMs,
+                }}, '*');
+              } catch {
+                window.postMessage({ source: 'WIREDATA_PAGE_HOOK', type: 'PAGE_CAPTURE', payload: {
+                  sessionId: state.sessionId, tabId: state.tabId, method: data.method,
+                  url: data.sanitizedUrl, sanitized_url: data.sanitizedUrl,
+                  pageUrl: sanitizeUrl(window.location.href),
+                  status: this.status, statusText: this.statusText,
+                  mimeType: contentType || 'application/json', graphqlOperationName: data.graphqlOp,
+                  body: undefined, rawText, bodySize: bodyBytes, parseStatus: 'parse_error',
+                  startedAt: data.startedAt, completedAt: new Date().toISOString(), durationMs,
+                }}, '*');
+              }
             }
           }
         } catch {}
@@ -238,13 +299,13 @@ async function stopCaptureForTab(tabId: number): Promise<void> {
   }
 }
 
-// 1. Configure default side panel behavior to open directly on action left-click
-chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
+// 1. Disable automatic global side panel so toolbar click invokes action listener with activeTab
+chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false })?.catch?.(() => {});
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
+  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false })?.catch?.(() => {});
 });
 
-// Action click fallback
+// Action click gesture-driven tab-specific side panel binding
 chrome.action.onClicked.addListener(async tab => {
   if (tab.id) {
     try {

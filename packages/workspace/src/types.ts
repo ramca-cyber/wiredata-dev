@@ -21,8 +21,17 @@ export interface WALQueueItem {
   created_at: string;
 }
 
+export interface IFileAdapter {
+  readFile(path: string): Promise<string | null>;
+  writeFile(path: string, content: string): Promise<void>;
+  listFiles(dirPath: string): Promise<string[]>;
+  deleteFile(path: string): Promise<void>;
+  deletePath(path: string, options?: { recursive?: boolean }): Promise<void>;
+  createDir(dirPath: string): Promise<void>;
+}
+
 export interface IWorkspaceStorage {
-  initializeWorkspace(metadata: WorkspaceMetadata): Promise<void>;
+  initializeWorkspace(metadata?: Partial<WorkspaceMetadata>): Promise<void>;
   getMetadata(): Promise<WorkspaceMetadata | null>;
   saveSession(session: CaptureSession): Promise<void>;
   listSessions(): Promise<CaptureSession[]>;
@@ -37,10 +46,14 @@ export interface IWorkspaceStorage {
   saveDatasetDefinition(definition: DatasetDefinition): Promise<void>;
   listDatasetDefinitions(): Promise<DatasetDefinition[]>;
   getDatasetDefinition(datasetId: string): Promise<DatasetDefinition | null>;
+  deleteDataset(datasetId: string): Promise<void>;
   saveDatasetSnapshot(snapshot: DatasetSnapshot, rows: ExtractedRow[]): Promise<void>;
   getDatasetSnapshot(datasetId: string, snapshotId: ULID): Promise<{ snapshot: DatasetSnapshot; rows: ExtractedRow[] } | null>;
 
   saveQuery(query: SavedQuery): Promise<void>;
   listQueries(): Promise<SavedQuery[]>;
   deleteQuery(queryId: ULID): Promise<void>;
+
+  gcOrphanedObjects(): Promise<number>;
+  clearWorkspaceContents(): Promise<void>;
 }

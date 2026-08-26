@@ -92,12 +92,47 @@ export class PageNetworkCaptureAdapter {
   }
 
   private async handlePayload(p: any): Promise<void> {
-    // Response bodies are the actual data being captured — stored exactly as
-    // received. Only flag credential-shaped keys for the UI; never alter them.
-    const jsonStr = JSON.stringify(p.body);
-    const hash = await sha256(jsonStr);
-    const sensitiveFields = detectSensitiveJsonPaths(p.body);
     const normalizedRoute = computeNormalizedRoute(p.method, p.url, p.graphqlOperationName);
+
+    if (p.parseStatus === 'skipped_large' || p.parseStatus === 'parse_error') {
+      const capture: CapturedRequest = {
+        capture_id: generateULID(),
+        session_id: this.sessionId,
+        capture_mode: 'page',
+        request: {
+          url: p.sanitized_url,
+          sanitized_url: p.sanitized_url,
+          route_template: normalizedRoute,
+          method: p.method,
+          query_parameters: [],
+          graphql_operation_name: p.graphqlOperationName,
+        },
+        response: {
+          status: p.status,
+          status_text: p.statusText,
+          mime_type: p.mimeType,
+          headers: [{ name: 'Content-Type', value: p.mimeType, is_redacted: false }],
+          body_size: p.bodySize || 0,
+          body_hash: '',
+          body_object_ref: '',
+        },
+        timing: {
+          started_at: p.startedAt,
+          completed_at: p.completedAt,
+          duration_ms: p.durationMs,
+        },
+        classification: {
+          json_candidate: false,
+          parse_status: p.parseStatus,
+        },
+      };
+      this.onCapture(capture, undefined, []);
+      return;
+    }
+
+    const rawText = p.rawText !== undefined ? p.rawText : JSON.stringify(p.body);
+    const hash = await sha256(rawText);
+    const sensitiveFields = p.body ? detectSensitiveJsonPaths(p.body) : [];
 
     const capture: CapturedRequest = {
       capture_id: generateULID(),
@@ -118,7 +153,7 @@ export class PageNetworkCaptureAdapter {
         status_text: p.statusText,
         mime_type: p.mimeType,
         headers: [{ name: 'Content-Type', value: p.mimeType, is_redacted: false }],
-        body_size: jsonStr.length,
+        body_size: p.bodySize || new TextEncoder().encode(rawText).byteLength,
         body_hash: hash,
         body_object_ref: hash,
       },
@@ -134,7 +169,7 @@ export class PageNetworkCaptureAdapter {
       },
     };
 
-    const candidates = detectCandidateCollections(p.body);
+    const candidates = p.body ? detectCandidateCollections(p.body) : [];
     this.onCapture(capture, p.body, candidates);
   }
 }

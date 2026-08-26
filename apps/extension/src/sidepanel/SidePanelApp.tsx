@@ -13,6 +13,7 @@ import {
   detectCandidateCollections,
   generateULID,
   redactQueryParams,
+  serializeToCsv,
   ULID,
 } from '@wiredata/core';
 import {
@@ -26,11 +27,15 @@ import { PageNetworkCaptureAdapter } from '../adapters/page.js';
 import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
 interface DiscoveredItem {
+  id: string; // mode:route:pointer
   name: string;
+  route: string;
+  pointer: string;
   rowCount: number;
   capturesCount: number;
   source: string;
   rows: Record<string, any>[];
+  captureRefs: Array<{ sessionId: ULID; captureId: ULID; bodyHash?: string }>;
 }
 
 // Generate clean TypeScript interface and JSON Schema from sample records
@@ -91,39 +96,12 @@ function generateTypesFromRows(name: string, rows: Record<string, any>[]): { tsI
   };
 }
 
-// Smart deduplication for row records (by primary key ID or content hash)
-function deduplicateRecordObjects(existingRows: Record<string, any>[], newRows: Record<string, any>[]): Record<string, any>[] {
-  const combined = [...existingRows, ...newRows];
-  if (combined.length === 0) return [];
-
-  const firstRow = combined[0];
-  const keys = Object.keys(firstRow);
-  const idCol = keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k));
-
-  const seen = new Set<string>();
-  const uniqueRows: Record<string, any>[] = [];
-
-  for (const row of combined) {
-    let key: string;
-    if (idCol && row[idCol] !== undefined && row[idCol] !== null) {
-      key = String(row[idCol]);
-    } else {
-      key = JSON.stringify(row);
-    }
-
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueRows.push(row);
-    }
-  }
-
-  return uniqueRows;
-}
-
 export function SidePanelApp() {
-  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6';
+  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.7';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
+  const isCapturingRef = useRef<boolean>(false);
+  isCapturingRef.current = isCapturing;
   const [activeSession, setActiveSession] = useState<CaptureSession | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [isScraping, setIsScraping] = useState<boolean>(false);
@@ -179,17 +157,21 @@ export function SidePanelApp() {
 
             if (extractedRows.length > 0) {
               const name = cand.suggested_name === 'rows' && cap.capture_mode === 'dom' ? 'scraped_table' : cand.suggested_name;
-              const existing = itemsMap.get(name);
-              const combined = existing
-                ? deduplicateRecordObjects(existing.rows, extractedRows)
-                : extractedRows;
+              const colKey = `${cap.capture_mode}:${cap.request.route_template || cap.request.sanitized_url}:${cand.pointer}`;
+              const existing = itemsMap.get(colKey);
+              const combined = existing ? [...existing.rows, ...extractedRows] : extractedRows;
               const count = existing ? existing.capturesCount + 1 : 1;
-              itemsMap.set(name, {
+              const refs = existing ? [...existing.captureRefs, { sessionId: sess.session_id, captureId: cap.capture_id, bodyHash: cap.response.body_hash }] : [{ sessionId: sess.session_id, captureId: cap.capture_id, bodyHash: cap.response.body_hash }];
+              itemsMap.set(colKey, {
+                id: colKey,
                 name,
+                route: cap.request.route_template || cap.request.sanitized_url,
+                pointer: cand.pointer,
                 rowCount: combined.length,
                 capturesCount: count,
                 source: cap.capture_mode === 'dom' ? 'DOM Table' : `JSON API (${cap.request.method})`,
                 rows: combined,
+                captureRefs: refs,
               });
             }
           }
@@ -224,20 +206,24 @@ export function SidePanelApp() {
         }
 
         if (extractedRows.length > 0) {
+          const colKey = `${capture.capture_mode}:${capture.request.route_template || capture.request.sanitized_url}:${cand.pointer}`;
           setDiscoveredItems(prev => {
-            const existing = prev.find(x => x.name === cand.suggested_name);
-            const combinedRows = existing
-              ? deduplicateRecordObjects(existing.rows, extractedRows)
-              : extractedRows;
+            const existing = prev.find(x => x.id === colKey);
+            const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
             const capturesCount = existing ? (existing.capturesCount || 1) + 1 : 1;
+            const refs = existing ? [...existing.captureRefs, { sessionId, captureId: capture.capture_id, bodyHash: capture.response.body_hash }] : [{ sessionId, captureId: capture.capture_id, bodyHash: capture.response.body_hash }];
             const updatedItem: DiscoveredItem = {
+              id: colKey,
               name: cand.suggested_name,
+              route: capture.request.route_template || capture.request.sanitized_url,
+              pointer: cand.pointer,
               rowCount: combinedRows.length,
               capturesCount,
               source: `JSON API (${capture.request.method})`,
               rows: combinedRows,
+              captureRefs: refs,
             };
-            return [updatedItem, ...prev.filter(x => x.name !== cand.suggested_name)];
+            return [updatedItem, ...prev.filter(x => x.id !== colKey)];
           });
         }
       }
@@ -337,6 +323,7 @@ export function SidePanelApp() {
     }
 
     const tabActivatedListener = async (activeInfo: { tabId: number; windowId: number }) => {
+      if (isCapturingRef.current) return;
       if (typeof chrome !== 'undefined' && chrome.tabs?.get) {
         try {
           const tab = await chrome.tabs.get(activeInfo.tabId);
@@ -458,37 +445,44 @@ export function SidePanelApp() {
 
   const handleScrapeTable = async () => {
     setScrapeStatus(null);
-    let targetTab = activeTab;
-    if (!targetTab?.id && typeof chrome !== 'undefined' && chrome.tabs?.query) {
-      try {
+    setIsScraping(true);
+
+    try {
+      let targetTab = activeTab;
+      if (!targetTab?.id && typeof chrome !== 'undefined' && chrome.tabs?.query) {
         let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tabs[0]) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tabs[0]?.id) {
           targetTab = { id: tabs[0].id, url: tabs[0].url || tabs[0].pendingUrl || '', title: tabs[0].title || '' };
           setActiveTab(targetTab);
         }
-      } catch {}
-    }
+      }
 
-    if (!targetTab?.id) {
-      setScrapeStatus({ message: 'Please open an active web page tab first.', tone: 'error' });
-      return;
-    }
+      if (!targetTab?.id) {
+        setScrapeStatus({ message: 'No active web page found to scrape.', tone: 'error' });
+        return;
+      }
 
-    setIsScraping(true);
-    try {
+      if (targetTab.url?.startsWith('chrome')) {
+        setScrapeStatus({ message: 'Cannot scrape internal browser pages.', tone: 'error' });
+        return;
+      }
+
       let session = activeSession;
       if (!session) {
+        let hostNameClean = 'Active Web Tab';
+        try { if (targetTab.url) hostNameClean = new URL(targetTab.url).hostname; } catch {}
+        const sessionId = generateULID();
         session = {
-          session_id: generateULID(),
-          name: `Table Scrape: ${hostName || 'Active Tab'}`,
+          session_id: sessionId,
+          name: `DOM Scrape: ${hostNameClean}`,
           started_at: new Date().toISOString(),
           initial_page_url: targetTab.url ? redactQueryParams(targetTab.url).sanitizedUrl : '',
           navigation_history: [],
           capture_count: 0,
           body_bytes: 0,
           application_version: appVersion,
-          status: 'new',
+          status: 'complete',
         };
         setActiveSession(session);
         await workspaceManager.saveSession(session);
@@ -505,20 +499,26 @@ export function SidePanelApp() {
 
       if (outcome.body?.rows && outcome.body.rows.length > 0) {
         const tableName = outcome.candidates[0]?.suggested_name || 'scraped_table';
+        const colKey = `dom:${outcome.capture.request.sanitized_url}:/`;
         setDiscoveredItems(prev => {
-          const existing = prev.find(x => x.name === tableName);
-          const combinedRows = existing
-            ? deduplicateRecordObjects(existing.rows, outcome.body.rows)
-            : outcome.body.rows;
+          const existing = prev.find(x => x.id === colKey);
+          const combinedRows = existing ? [...existing.rows, ...outcome.body.rows] : outcome.body.rows;
           const capturesCount = existing ? (existing.capturesCount || 1) + 1 : 1;
+          const refs = existing
+            ? [...existing.captureRefs, { sessionId: session!.session_id, captureId: outcome.capture.capture_id, bodyHash: outcome.capture.response.body_hash }]
+            : [{ sessionId: session!.session_id, captureId: outcome.capture.capture_id, bodyHash: outcome.capture.response.body_hash }];
           const updatedItem: DiscoveredItem = {
+            id: colKey,
             name: tableName,
+            route: outcome.capture.request.sanitized_url,
+            pointer: '/',
             rowCount: combinedRows.length,
             capturesCount,
             source: outcome.strategy === 'table' ? 'DOM Table' : 'Virtualized Grid',
             rows: combinedRows,
+            captureRefs: refs,
           };
-          return [updatedItem, ...prev.filter(x => x.name !== tableName)];
+          return [updatedItem, ...prev.filter(x => x.id !== colKey)];
         });
       }
 
@@ -542,19 +542,20 @@ export function SidePanelApp() {
     }
   };
 
-  // 1-Click CSV Export
+  // 1-Click CSV Export (Formula safe)
   const handleExportCsv = (item: DiscoveredItem) => {
     if (!item.rows || item.rows.length === 0) return;
     const headers = Object.keys(item.rows[0]);
-    const escapeCsv = (val: any) => {
-      if (val === null || val === undefined) return '';
-      const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
-      return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
-    };
-    const csvContent = [
-      headers.map(escapeCsv).join(','),
-      ...item.rows.map(row => headers.map(h => escapeCsv(row[h])).join(',')),
-    ].join('\n');
+    const mockSchema: Record<string, any> = {};
+    headers.forEach((h, i) => {
+      mockSchema[h] = { name: h, original_name: h, logical_type: 'VARCHAR', inferred_type: 'VARCHAR', is_visible: true, order: i };
+    });
+    const mockRows = item.rows.map(r => ({
+      values: r,
+      lineage: { capture_id: item.captureRefs[0]?.captureId || '', record_pointer: item.pointer, captured_at: new Date().toISOString() },
+      field_lineage: {},
+    }));
+    const csvContent = serializeToCsv(mockRows as any, mockSchema, false, { spreadsheetSafe: true });
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -626,45 +627,16 @@ export function SidePanelApp() {
         for (const c of caps) {
           await workspaceManager.deleteCapture(activeSession.session_id, c.capture_id);
         }
+        await workspaceManager.gcOrphanedObjects();
       }
     } catch {}
   };
 
-  const handleRemoveItem = (name: string) => {
-    setDiscoveredItems(prev => prev.filter(x => x.name !== name));
-    setAllHistoryItems(prev => prev.filter(x => x.name !== name));
-    if (previewItem?.name === name) setPreviewItem(null);
+  const handleRemoveItem = (id: string) => {
+    setDiscoveredItems(prev => prev.filter(x => x.id !== id));
+    setAllHistoryItems(prev => prev.filter(x => x.id !== id));
+    if (previewItem?.id === id) setPreviewItem(null);
     setScrapeStatus(null);
-  };
-
-  const handleLoadSampleData = () => {
-    const sampleOrders: DiscoveredItem = {
-      name: 'orders',
-      rowCount: 5,
-      capturesCount: 1,
-      source: 'Sample Data',
-      rows: [
-        { id: 'ORD-1001', customer: 'Alice Smith', email: 'alice@example.com', items_count: 3, total_amount: 149.99, status: 'completed' },
-        { id: 'ORD-1002', customer: 'Bob Jones', email: 'bob@example.com', items_count: 1, total_amount: 49.50, status: 'shipped' },
-        { id: 'ORD-1003', customer: 'Charlie Brown', email: 'charlie@example.com', items_count: 5, total_amount: 320.00, status: 'processing' },
-        { id: 'ORD-1004', customer: 'Diana Prince', email: 'diana@example.com', items_count: 2, total_amount: 89.90, status: 'completed' },
-        { id: 'ORD-1005', customer: 'Evan Wright', email: 'evan@example.com', items_count: 4, total_amount: 210.25, status: 'pending' },
-      ],
-    };
-    const sampleProducts: DiscoveredItem = {
-      name: 'products',
-      rowCount: 4,
-      capturesCount: 1,
-      source: 'Sample Data',
-      rows: [
-        { id: 'PROD-101', name: 'Wireless Keyboard', category: 'Hardware', in_stock: true, unit_price: 129.99 },
-        { id: 'PROD-102', name: 'Ultra-Wide 4K Monitor', category: 'Hardware', in_stock: true, unit_price: 499.00 },
-        { id: 'PROD-103', name: 'Standing Desk', category: 'Furniture', in_stock: false, unit_price: 650.00 },
-        { id: 'PROD-104', name: 'Dual 4K Dock', category: 'Accessories', in_stock: true, unit_price: 89.50 },
-      ],
-    };
-    setDiscoveredItems([sampleOrders, sampleProducts]);
-    setCaptureCount(prev => prev + 2);
   };
 
   const handleOpenWorkbench = () => {
@@ -688,7 +660,6 @@ export function SidePanelApp() {
           <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.02em' }}>WireData</span>
           <span style={{ fontSize: 10, color: colors.textDim, fontFamily: fonts.mono }}>v{appVersion}</span>
         </div>
-        <button onClick={handleLoadSampleData} title="Instantly load sample datasets for testing" style={{ background: `${colors.accent}18`, border: `1px solid ${colors.accent}44`, color: colors.accent, borderRadius: 6, padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>⚡ Sample Data</button>
       </div>
 
       {/* Target Tab Host Card */}
@@ -830,7 +801,7 @@ export function SidePanelApp() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {visibleItems.map(item => (
                 <div
-                  key={item.name}
+                  key={item.id}
                   style={{
                     background: colors.cardBg,
                     border: `1px solid ${colors.borderLight}`,
@@ -853,7 +824,7 @@ export function SidePanelApp() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
                       <button
-                        onClick={() => handleRemoveItem(item.name)}
+                        onClick={() => handleRemoveItem(item.id)}
                         title={`Remove ${item.name}`}
                         style={{
                           background: 'transparent',

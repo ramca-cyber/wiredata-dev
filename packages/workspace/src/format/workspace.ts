@@ -14,15 +14,7 @@ import {
   ULID,
   WorkspaceMetadata,
 } from '@wiredata/core';
-import { IWorkspaceStorage } from '../types.js';
-
-export interface IFileAdapter {
-  readFile(path: string): Promise<string | null>;
-  writeFile(path: string, content: string): Promise<void>;
-  listFiles(dirPath: string): Promise<string[]>;
-  deleteFile(path: string): Promise<void>;
-  createDir(dirPath: string): Promise<void>;
-}
+import { IWorkspaceStorage, IFileAdapter } from '../types.js';
 
 /**
  * In-memory adapter for unit testing and Node execution
@@ -54,6 +46,19 @@ export class InMemoryFileAdapter implements IFileAdapter {
 
   async deleteFile(path: string): Promise<void> {
     this.files.delete(path);
+  }
+
+  async deletePath(path: string, options?: { recursive?: boolean }): Promise<void> {
+    if (options?.recursive) {
+      const prefix = path.endsWith('/') ? path : `${path}/`;
+      for (const key of Array.from(this.files.keys())) {
+        if (key === path || key.startsWith(prefix)) {
+          this.files.delete(key);
+        }
+      }
+    } else {
+      this.files.delete(path);
+    }
   }
 
   async createDir(): Promise<void> {
@@ -158,6 +163,34 @@ export class IndexedDBFileAdapter implements IFileAdapter {
     } catch {}
   }
 
+  async deletePath(path: string, options?: { recursive?: boolean }): Promise<void> {
+    try {
+      const db = await this.getDb();
+      if (!options?.recursive) {
+        return this.deleteFile(path);
+      }
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_FILES_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_FILES_STORE);
+        const req = store.openCursor();
+        const prefix = path.endsWith('/') ? path : `${path}/`;
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (cursor) {
+            const key = String(cursor.key);
+            if (key === path || key.startsWith(prefix)) {
+              cursor.delete();
+            }
+            cursor.continue();
+          } else {
+            resolve();
+          }
+        };
+        req.onerror = () => reject(req.error);
+      });
+    } catch {}
+  }
+
   async createDir(): Promise<void> {
     // Flat key-value store doesn't need explicit directories
   }
@@ -246,6 +279,16 @@ export class FSDirectoryAdapter implements IFileAdapter {
     } catch {}
   }
 
+  async deletePath(path: string, options?: { recursive?: boolean }): Promise<void> {
+    try {
+      const segments = path.split('/').filter(Boolean);
+      if (segments.length === 0) return;
+      const targetName = segments.pop()!;
+      const parentDir = await this.getDirectoryHandle(segments, false);
+      await parentDir.removeEntry(targetName, { recursive: options?.recursive ?? false });
+    } catch {}
+  }
+
   async createDir(dirPath: string): Promise<void> {
     const segments = dirPath.split('/').filter(Boolean);
     await this.getDirectoryHandle(segments, true);
@@ -267,7 +310,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
       const updated: WorkspaceMetadata = {
         ...existing,
         last_opened_at: new Date().toISOString(),
-        application_version: '0.1.0',
+        application_version: metadata?.application_version || '0.1.7',
       };
       await this.adapter.writeFile('workspace.json', JSON.stringify(updated, null, 2));
       return updated;
@@ -278,7 +321,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
       workspace_id: metadata?.workspace_id || generateULID(),
       created_at: metadata?.created_at || new Date().toISOString(),
       last_opened_at: new Date().toISOString(),
-      application_version: '0.1.0',
+      application_version: metadata?.application_version || '0.1.7',
     };
     await this.adapter.writeFile('workspace.json', JSON.stringify(meta, null, 2));
     await this.adapter.createDir('sessions');
@@ -334,7 +377,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
   }
 
   async deleteSession(sessionId: ULID): Promise<void> {
-    await this.adapter.deleteFile(`sessions/${sessionId}/session.json`);
+    await this.adapter.deletePath(`sessions/${sessionId}`, { recursive: true });
   }
 
   async saveCapture(sessionId: ULID, capture: CapturedRequest, rawBody?: unknown): Promise<void> {
@@ -357,7 +400,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
       const objPath = `objects/${capture.response.body_hash}.json`;
       const existing = await this.adapter.readFile(objPath);
       if (!existing) {
-        await this.adapter.writeFile(objPath, JSON.stringify(rawBody));
+        await this.adapter.writeFile(objPath, typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody));
       }
     }
   }
@@ -389,7 +432,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
     try {
       return JSON.parse(content);
     } catch {
-      return null;
+      return content;
     }
   }
 
@@ -421,6 +464,10 @@ export class WorkspaceManager implements IWorkspaceStorage {
     } catch {
       return null;
     }
+  }
+
+  async deleteDataset(datasetId: string): Promise<void> {
+    await this.adapter.deletePath(`datasets/${datasetId}`, { recursive: true });
   }
 
   async saveDatasetSnapshot(snapshot: DatasetSnapshot, rows: ExtractedRow[]): Promise<void> {
@@ -474,5 +521,51 @@ export class WorkspaceManager implements IWorkspaceStorage {
       await this.adapter.deleteFile(`queries/${target.name}.sql`);
       await this.adapter.deleteFile(`queries/${target.name}.json`);
     }
+  }
+
+  async gcOrphanedObjects(): Promise<number> {
+    const sessions = await this.listSessions();
+    const referencedHashes = new Set<string>();
+    for (const sess of sessions) {
+      const captures = await this.listCaptures(sess.session_id);
+      for (const cap of captures) {
+        if (cap.response.body_hash) {
+          referencedHashes.add(cap.response.body_hash);
+        }
+      }
+    }
+
+    const objectFiles = await this.adapter.listFiles('objects');
+    let deletedCount = 0;
+    for (const f of objectFiles) {
+      const hash = f.replace(/\.json$/i, '');
+      if (!referencedHashes.has(hash)) {
+        await this.adapter.deleteFile(`objects/${f}`);
+        deletedCount++;
+      }
+    }
+    return deletedCount;
+  }
+
+  async clearWorkspaceContents(): Promise<void> {
+    const sessions = await this.listSessions();
+    for (const sess of sessions) {
+      await this.deleteSession(sess.session_id);
+    }
+    const datasets = await this.listDatasetDefinitions();
+    for (const ds of datasets) {
+      await this.deleteDataset(ds.id);
+    }
+    const queries = await this.listQueries();
+    for (const q of queries) {
+      await this.deleteQuery(q.query_id);
+    }
+    await this.adapter.deletePath('objects', { recursive: true });
+    await this.adapter.deletePath('exports', { recursive: true });
+    await this.adapter.createDir('sessions');
+    await this.adapter.createDir('objects');
+    await this.adapter.createDir('datasets');
+    await this.adapter.createDir('queries');
+    await this.adapter.createDir('exports');
   }
 }

@@ -57,8 +57,17 @@ export async function captureTableFromActiveTab(
   // via a suggested ColumnParseRule, applied at dataset-build time), not
   // something baked into the capture before anyone's had a chance to see or
   // correct it.
+  // Deduplicate and uniquify headers (e.g. Price, Price -> Price, Price_2)
+  const headerCounts = new Map<string, number>();
+  const uniqueHeaders = result.headers.map((h, i) => {
+    const base = h || `column_${i + 1}`;
+    const count = headerCounts.get(base) || 0;
+    headerCounts.set(base, count + 1);
+    return count === 0 ? base : `${base}_${count + 1}`;
+  });
+
   const rowObjects = result.rows.map(cells =>
-    Object.fromEntries(result.headers.map((h, i) => [h || `column_${i + 1}`, cells[i] ?? '']))
+    Object.fromEntries(uniqueHeaders.map((h, i) => [h, cells[i] ?? '']))
   );
   const body = { rows: rowObjects };
   const bodyStr = JSON.stringify(body);

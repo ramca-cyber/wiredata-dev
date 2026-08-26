@@ -97,11 +97,15 @@ export function redactQueryParams(urlOrQuery: string): {
   let sanitizedUrl = urlOrQuery;
   if (urlObj) {
     urlObj.search = sanitizedSearchParams.toString();
+    urlObj.hash = '';
     sanitizedUrl = urlObj.toString();
   } else if (urlOrQuery.includes('?')) {
     const base = urlOrQuery.slice(0, urlOrQuery.indexOf('?'));
+    const cleanBase = base.includes('#') ? base.slice(0, base.indexOf('#')) : base;
     const qs = sanitizedSearchParams.toString();
-    sanitizedUrl = qs ? `${base}?${qs}` : base;
+    sanitizedUrl = qs ? `${cleanBase}?${qs}` : cleanBase;
+  } else if (urlOrQuery.includes('#')) {
+    sanitizedUrl = urlOrQuery.slice(0, urlOrQuery.indexOf('#'));
   }
 
   return { sanitizedUrl, params };

@@ -124,7 +124,7 @@
 
 <main>
   <div class="updated">
-    <strong>Last updated:</strong> August 2026 &nbsp;·&nbsp; <strong>Version:</strong> 0.1.6
+    <strong>Last updated:</strong> August 2026 &nbsp;·&nbsp; <strong>Version:</strong> 0.1.7
   </div>
 
   <div class="highlight">
@@ -164,13 +164,13 @@
     <h3>B. Web Browsing Activity & URLs</h3>
     <ul>
       <li><strong>Request & Page URLs:</strong> Request endpoint URLs and target page URLs are recorded during capture.</li>
-      <li><strong>Automatic URL Sanitization:</strong> Query parameters containing credential-shaped names (such as <code>token</code>, <code>auth</code>, <code>key</code>, <code>secret</code>, <code>password</code>, <code>apikey</code>, <code>access_token</code>) are automatically redacted before storage (e.g., replaced with <code>[REDACTED]</code>).</li>
+      <li><strong>Automatic URL Sanitization:</strong> Query parameters containing credential-shaped names (such as <code>token</code>, <code>auth</code>, <code>key</code>, <code>secret</code>, <code>password</code>, <code>apikey</code>, <code>access_token</code>) and URL hash fragments are automatically redacted or stripped before storage.</li>
     </ul>
 
     <h3>C. Authentication & Request Credentials</h3>
     <ul>
       <li><strong>Request Authentication Headers:</strong> Headers such as <code>Authorization</code>, <code>Cookie</code>, and custom session tokens are <strong>never stored</strong>.</li>
-      <li><strong>Request Bodies:</strong> HTTP request payloads are not collected in standard capture mode.</li>
+      <li><strong>Request Bodies:</strong> Request bodies are not stored. In DevTools capture mode, WireData may transiently inspect a request body locally to identify a GraphQL operation name; the request body itself is discarded immediately.</li>
     </ul>
   </section>
 

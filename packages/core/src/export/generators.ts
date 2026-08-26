@@ -103,12 +103,13 @@ export function generateJsonSchema(
 }
 
 /**
- * Serializes dataset rows to CSV format
+ * Serializes dataset rows to CSV format with spreadsheet formula safety
  */
 export function serializeToCsv(
   rows: ExtractedRow[],
   schema: Record<string, ColumnDefinition>,
-  includeProvenance: boolean = false
+  includeProvenance: boolean = false,
+  options: { spreadsheetSafe?: boolean } = { spreadsheetSafe: true }
 ): string {
   const visibleCols = Object.values(schema)
     .filter(c => c.is_visible)
@@ -122,14 +123,17 @@ export function serializeToCsv(
 
   function escapeCsvCell(val: unknown): string {
     if (val === null || val === undefined) return '';
-    const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    if (options.spreadsheetSafe !== false && /^[=+\-@]/.test(str)) {
+      str = `'${str}`;
+    }
     if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
       return `"${str.replace(/"/g, '""')}"`;
     }
     return str;
   }
 
-  const lines: string[] = [headerCols.map(escapeCsvCell).join(',')];
+  const lines: string[] = [headerCols.map(c => escapeCsvCell(c)).join(',')];
 
   for (const row of rows) {
     const rowValues = visibleCols.map(col => escapeCsvCell(row.values[col]));

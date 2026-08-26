@@ -189,7 +189,7 @@ export class DuckDBClient {
         },
       };
       const bundle = await duckdb.selectBundle(MANUAL_BUNDLES);
-      const worker = await duckdb.createWorker(bundle.mainWorker!);
+      const worker = new Worker(bundle.mainWorker!);
       const logger = new duckdb.ConsoleLogger();
       this.db = new duckdb.AsyncDuckDB(logger, worker);
       await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);

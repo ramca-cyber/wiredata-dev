@@ -162,28 +162,33 @@ export async function extractDomTable(rootSelector?: string): Promise<DomExtract
     root: Element
   ): Promise<{ headers: string[]; rows: string[][]; expectedRowCount?: number }> {
     const viewport = findScrollViewport(root);
-    const collected = new Map<string, string[]>();
-    const maxIterations = 200;
-    let stableIterations = 0;
+    const originalScrollTop = viewport.scrollTop;
+    try {
+      const collected = new Map<string, string[]>();
+      const maxIterations = 200;
+      let stableIterations = 0;
 
-    for (let i = 0; i < maxIterations && stableIterations < 3; i++) {
-      const before = collected.size;
+      for (let i = 0; i < maxIterations && stableIterations < 3; i++) {
+        const before = collected.size;
+        for (const { key, cells } of readVisibleRows(root)) {
+          if (!collected.has(key)) collected.set(key, cells);
+        }
+        stableIterations = collected.size > before ? 0 : stableIterations + 1;
+
+        viewport.scrollTop = viewport.scrollTop + viewport.clientHeight * 0.85;
+        await new Promise(resolve => setTimeout(resolve, 120));
+      }
+
+      // Final read after the loop's last scroll, in case it landed on new rows
       for (const { key, cells } of readVisibleRows(root)) {
         if (!collected.has(key)) collected.set(key, cells);
       }
-      stableIterations = collected.size > before ? 0 : stableIterations + 1;
 
-      viewport.scrollTop = viewport.scrollTop + viewport.clientHeight * 0.85;
-      await new Promise(resolve => setTimeout(resolve, 120));
+      const headers = readHeaders(root);
+      return { headers, rows: Array.from(collected.values()), expectedRowCount: readExpectedRowCount(root) };
+    } finally {
+      viewport.scrollTop = originalScrollTop;
     }
-
-    // Final read after the loop's last scroll, in case it landed on new rows
-    for (const { key, cells } of readVisibleRows(root)) {
-      if (!collected.has(key)) collected.set(key, cells);
-    }
-
-    const headers = readHeaders(root);
-    return { headers, rows: Array.from(collected.values()), expectedRowCount: readExpectedRowCount(root) };
   }
 
   const explicitRoot = rootSelector ? document.querySelector(rootSelector) : null;

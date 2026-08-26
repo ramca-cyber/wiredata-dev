@@ -78,17 +78,24 @@ export class ChromeNetworkCaptureAdapter {
       let parseStatus: CapturedRequest['classification']['parse_status'] = 'parsed';
       let bodyHash = '';
 
+      let rawText = '';
       if (!content) {
         parseStatus = 'body_unavailable';
       } else {
         try {
-          const decoded = encoding === 'base64' ? atob(content) : content;
-          bodyHash = await sha256(decoded);
+          if (encoding === 'base64') {
+            const bytes = Uint8Array.from(atob(content), c => c.charCodeAt(0));
+            rawText = new TextDecoder('utf-8').decode(bytes);
+          } else {
+            rawText = content;
+          }
+          bodyHash = await sha256(rawText);
 
-          if (decoded.length > 25 * 1024 * 1024) {
+          const bodyBytes = new TextEncoder().encode(rawText).byteLength;
+          if (bodyBytes > 25 * 1024 * 1024) {
             parseStatus = 'skipped_large';
           } else {
-            rawJson = JSON.parse(decoded);
+            rawJson = JSON.parse(rawText);
             sensitiveFields = detectSensitiveJsonPaths(rawJson);
           }
         } catch {
@@ -112,7 +119,7 @@ export class ChromeNetworkCaptureAdapter {
           status: response.status,
           status_text: response.statusText,
           mime_type: mimeType,
-          body_size: response.bodySize || content?.length || 0,
+          body_size: response.bodySize || (rawText ? new TextEncoder().encode(rawText).byteLength : content?.length || 0),
           body_hash: bodyHash,
           body_object_ref: bodyHash,
         },

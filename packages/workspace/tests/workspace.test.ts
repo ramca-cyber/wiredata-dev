@@ -26,7 +26,7 @@ describe('Workspace Storage & Serialization', () => {
     const metadata = await manager.getMetadata();
     expect(metadata).not.toBeNull();
     expect(metadata?.format_version).toBe(1);
-    expect(metadata?.application_version).toBe('0.1.0');
+    expect(metadata?.application_version).toBe('0.1.7');
   });
 
   it('saves and lists capture sessions', async () => {
@@ -204,5 +204,113 @@ describe('Workspace Storage & Serialization', () => {
     expect(rawFileContent).not.toBeNull();
     expect(rawFileContent).not.toContain('RAW_SECRET_123');
     expect(rawFileContent).toContain('[REDACTED]');
+  });
+
+  it('deletes datasets and snapshots recursively', async () => {
+    const datasetId = 'ds_to_delete';
+    const snapshotId = generateULID();
+
+    await manager.saveDatasetDefinition({
+      id: datasetId,
+      name: 'delete_me',
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      sources: [],
+      extraction: { record_pointer: '/', nested_object_policy: 'flatten', nested_array_policy: 'json', flatten_delimiter: '__' },
+      identity_columns: [],
+      deduplication: 'keep_all',
+      columns: {},
+    });
+
+    await manager.saveDatasetSnapshot(
+      {
+        snapshot_id: snapshotId,
+        dataset_id: datasetId,
+        definition_version: 1,
+        created_at: new Date().toISOString(),
+        row_count: 0,
+        column_count: 0,
+        contributing_capture_ids: [],
+        schema: {},
+        coverage: { observed_unique_rows: 0, status: 'complete' },
+        duplicate_count: 0,
+        type_anomalies: [],
+      },
+      []
+    );
+
+    expect(await manager.getDatasetDefinition(datasetId)).not.toBeNull();
+    await manager.deleteDataset(datasetId);
+    expect(await manager.getDatasetDefinition(datasetId)).toBeNull();
+    expect(await manager.getDatasetSnapshot(datasetId, snapshotId)).toBeNull();
+  });
+
+  it('deletes sessions recursively and garbage collects orphaned objects', async () => {
+    const sessionId = generateULID();
+    const captureId = generateULID();
+    const bodyHash = 'orphan_test_hash';
+    const rawBody = { test: true };
+
+    const capture: CapturedRequest = {
+      capture_id: captureId,
+      session_id: sessionId,
+      request: { url: 'https://test.com', sanitized_url: 'https://test.com', method: 'GET', query_parameters: [] },
+      response: { status: 200, status_text: 'OK', mime_type: 'application/json', body_size: 10, body_hash: bodyHash, body_object_ref: bodyHash },
+      timing: { started_at: '', completed_at: '', duration_ms: 1 },
+      classification: { json_candidate: true, parse_status: 'parsed' },
+    };
+
+    await manager.saveSession({
+      session_id: sessionId,
+      name: 'GC Test',
+      started_at: new Date().toISOString(),
+      initial_page_url: '',
+      navigation_history: [],
+      capture_count: 1,
+      body_bytes: 10,
+      application_version: '0.1.7',
+      status: 'complete',
+    });
+    await manager.saveCapture(sessionId, capture, rawBody);
+
+    expect(await manager.getBodyObject(bodyHash)).toEqual(rawBody);
+
+    // Deleting session should remove captures
+    await manager.deleteSession(sessionId);
+    expect(await manager.getSession(sessionId)).toBeNull();
+    expect(await manager.listCaptures(sessionId)).toHaveLength(0);
+
+    // GC should now purge the unreferenced body object
+    const deletedCount = await manager.gcOrphanedObjects();
+    expect(deletedCount).toBe(1);
+    expect(await manager.getBodyObject(bodyHash)).toBeNull();
+  });
+
+  it('clearWorkspaceContents wipes all working state while keeping workspace metadata', async () => {
+    const metaBefore = await manager.getMetadata();
+    expect(metaBefore).not.toBeNull();
+
+    const sessionId = generateULID();
+    await manager.saveSession({
+      session_id: sessionId,
+      name: 'To Clear',
+      started_at: new Date().toISOString(),
+      initial_page_url: '',
+      navigation_history: [],
+      capture_count: 0,
+      body_bytes: 0,
+      application_version: '0.1.7',
+      status: 'new',
+    });
+
+    await manager.clearWorkspaceContents();
+
+    const sessions = await manager.listSessions();
+    expect(sessions).toHaveLength(0);
+
+    const metaAfter = await manager.getMetadata();
+    expect(metaAfter?.workspace_id).toBe(metaBefore?.workspace_id);
+    expect(metaAfter?.format_version).toBe(1);
   });
 });

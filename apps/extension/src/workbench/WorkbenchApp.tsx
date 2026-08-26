@@ -572,9 +572,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     }
   };
 
-  // Create Dataset from candidate
-  const handleCreateDataset = (candidate: CandidateCollection, capture: CapturedRequest) => {
-    const dsId = `ds_${candidate.suggested_name}`;
+  // Convert Discovered Candidate to Structured Dataset
+  const handleCreateDatasetFromCandidate = (capture: CapturedRequest, candidate: CandidateCollection) => {
+    const dsId = `ds_${candidate.suggested_name}_${generateULID().slice(-4).toLowerCase()}`;
     const def: DatasetDefinition = {
       id: dsId,
       name: candidate.suggested_name,
@@ -594,10 +594,8 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         nested_array_policy: 'json',
         flatten_delimiter: '__',
       },
-      identity_columns: candidate.sample_keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k))
-        ? [candidate.sample_keys.find(k => /^(id|_id|uuid|key|code|order_id|user_id|item_id)$/i.test(k))!]
-        : [],
-      deduplication: 'keep_latest',
+      identity_columns: [],
+      deduplication: 'keep_all',
       columns: {},
     };
 
@@ -606,6 +604,10 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     setActiveDatasetId(dsId);
     rebuildDataset(def);
     setActiveView('datasets');
+  };
+
+  const handleCreateDataset = (candidate: CandidateCollection, capture: CapturedRequest) => {
+    handleCreateDatasetFromCandidate(capture, candidate);
   };
 
   // Automatically rebuild dataset snapshots whenever definitions or captures change
@@ -715,6 +717,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     setSelectedRow(null);
     setSqlResult(null);
     responseBodiesRef.current.clear();
+    try {
+      await workspaceManager.clearWorkspaceContents();
+    } catch {}
     const newSessionId = generateULID();
     const newSession: CaptureSession = {
       session_id: newSessionId,
@@ -724,14 +729,14 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       navigation_history: [],
       capture_count: 0,
       body_bytes: 0,
-      application_version: '0.1.0',
+      application_version: '0.1.7',
       status: 'new',
     };
     setActiveSession(newSession);
     await workspaceManager.saveSession(newSession);
   };
 
-  const handleDeleteDataset = (datasetId: string) => {
+  const handleDeleteDataset = async (datasetId: string) => {
     setDefinitions(prev => prev.filter(d => d.id !== datasetId));
     setSnapshots(prev => {
       const next = new Map(prev);
@@ -742,14 +747,21 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       const remaining = definitions.filter(d => d.id !== datasetId);
       setActiveDatasetId(remaining[0]?.id || null);
     }
+    try {
+      await workspaceManager.deleteDataset(datasetId);
+      await workspaceManager.gcOrphanedObjects();
+    } catch {}
   };
 
   const handleDeleteCapture = async (captureId: ULID) => {
+    const targetCapture = captures.find(c => c.capture_id === captureId);
     setCaptures(prev => prev.filter(c => c.capture_id !== captureId));
     setCandidatesList(prev => prev.filter(item => item.capture.capture_id !== captureId));
-    if (activeSession) {
+    const sessId = targetCapture?.session_id || activeSession?.session_id;
+    if (sessId) {
       try {
-        await workspaceManager.deleteCapture(activeSession.session_id, captureId);
+        await workspaceManager.deleteCapture(sessId, captureId);
+        await workspaceManager.gcOrphanedObjects();
       } catch {}
     }
   };
@@ -758,19 +770,29 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     const capsToDel = [...captures];
     setCaptures([]);
     setCandidatesList([]);
-    if (activeSession) {
-      for (const c of capsToDel) {
-        try {
-          await workspaceManager.deleteCapture(activeSession.session_id, c.capture_id);
-        } catch {}
-      }
+    for (const c of capsToDel) {
+      try {
+        await workspaceManager.deleteCapture(c.session_id, c.capture_id);
+      } catch {}
     }
+    try {
+      await workspaceManager.gcOrphanedObjects();
+    } catch {}
   };
 
-  const handleClearAllDatasets = () => {
+  const handleClearAllDatasets = async () => {
+    const defsToDel = [...definitions];
     setDefinitions([]);
     setSnapshots(new Map());
     setActiveDatasetId(null);
+    for (const d of defsToDel) {
+      try {
+        await workspaceManager.deleteDataset(d.id);
+      } catch {}
+    }
+    try {
+      await workspaceManager.gcOrphanedObjects();
+    } catch {}
   };
 
   const handleClearCandidates = () => {
@@ -781,13 +803,14 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     const captureIds = new Set(routeCaptures.map(c => c.capture_id));
     setCandidatesList(prev => prev.filter(item => !captureIds.has(item.capture.capture_id)));
     setCaptures(prev => prev.filter(c => !captureIds.has(c.capture_id)));
-    if (activeSession) {
-      for (const c of routeCaptures) {
-        try {
-          await workspaceManager.deleteCapture(activeSession.session_id, c.capture_id);
-        } catch {}
-      }
+    for (const c of routeCaptures) {
+      try {
+        await workspaceManager.deleteCapture(c.session_id, c.capture_id);
+      } catch {}
     }
+    try {
+      await workspaceManager.gcOrphanedObjects();
+    } catch {}
   };
 
   const handleDismissCandidate = (captureId: ULID, pointer: string) => {
