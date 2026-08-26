@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy – WireData</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1116;
+      color: #cbd5e1;
+      line-height: 1.7;
+      padding: 0;
+    }
+    header {
+      background: linear-gradient(135deg, #0284c7 0%, #8b5cf6 100%);
+      padding: 48px 24px 40px;
+      text-align: center;
+    }
+    header .logo {
+      display: inline-flex; align-items: center; gap: 12px;
+      margin-bottom: 12px;
+    }
+    header .logo-icon {
+      width: 44px; height: 44px; border-radius: 10px;
+      background: rgba(255,255,255,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 22px; color: #fff;
+    }
+    header h1 { color: #fff; font-size: 1.6rem; font-weight: 700; }
+    header p { color: rgba(255,255,255,0.8); font-size: 0.9rem; margin-top: 6px; }
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+    .updated {
+      font-size: 0.8rem; color: #475569;
+      margin-bottom: 40px;
+      padding: 10px 16px;
+      background: #1e293b;
+      border-radius: 6px;
+      border-left: 3px solid #0284c7;
+    }
+    section { margin-bottom: 36px; }
+    h2 {
+      font-size: 1.1rem; font-weight: 600;
+      color: #f1f5f9;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #1e293b;
+    }
+    p { margin-bottom: 12px; color: #94a3b8; }
+    ul { padding-left: 20px; margin-bottom: 12px; }
+    li { margin-bottom: 6px; color: #94a3b8; }
+    .highlight {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 16px 0;
+    }
+    .highlight strong { color: #f1f5f9; }
+    .badge {
+      display: inline-block;
+      background: rgba(2,132,199,0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(2,132,199,0.3);
+      border-radius: 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      margin: 2px 2px 2px 0;
+    }
+    .badge.green { background: rgba(34,197,94,0.12); color: #4ade80; border-color: rgba(34,197,94,0.3); }
+    .badge.purple { background: rgba(139,92,246,0.12); color: #a78bfa; border-color: rgba(139,92,246,0.3); }
+    a { color: #38bdf8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    footer {
+      text-align: center;
+      padding: 32px;
+      font-size: 0.82rem;
+      color: #475569;
+      border-top: 1px solid #1e293b;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">W</div>
+    <h1>WireData Privacy Policy</h1>
+  </div>
+  <p>Network Data Workbench — Chrome Extension</p>
+</header>
+
+<main>
+  <div class="updated">Last updated: August 2026 &nbsp;·&nbsp; Version 0.1.0</div>
+
+  <div class="highlight">
+    <strong>Summary:</strong> WireData is a <strong>local-first, zero-telemetry developer tool</strong>.
+    All captured data stays in your browser and local filesystem.
+    WireData collects no personal information about you, transmits nothing to external servers,
+    and has no analytics, tracking, or advertising of any kind.
+    <br><br>
+    <span class="badge green">Zero Telemetry</span>
+    <span class="badge">Local-First</span>
+    <span class="badge purple">No External Servers</span>
+    <span class="badge">No Ads</span>
+    <span class="badge green">Open Source</span>
+  </div>
+
+  <section>
+    <h2>1. What WireData Does</h2>
+    <p>
+      WireData is a Chrome developer tool that helps software developers and data analysts inspect,
+      capture, and query structured JSON network traffic from web applications they are actively debugging.
+    </p>
+    <p>
+      When you explicitly click <strong>Start Capture</strong>, WireData temporarily monitors HTTP/HTTPS
+      fetch and XMLHttpRequest responses on the active browser tab and records structured JSON response bodies
+      into an in-memory or local-filesystem workspace.
+    </p>
+  </section>
+
+  <section>
+    <h2>2. Data We Collect About You</h2>
+    <p><strong>We collect nothing about you.</strong> Specifically:</p>
+    <ul>
+      <li>No name, email address, or account information</li>
+      <li>No usage analytics or telemetry</li>
+      <li>No crash reports sent to external servers</li>
+      <li>No advertising identifiers</li>
+      <li>No browser history beyond the active tab session you explicitly start</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. Network Request Data Captured at Your Direction</h2>
+    <p>
+      When you start a capture session, WireData intercepts JSON API responses from the active tab
+      you are inspecting. This captured data:
+    </p>
+    <ul>
+      <li><strong>Stays entirely in your browser</strong> (chrome.storage or local filesystem via the File System Access API)</li>
+      <li>Is <strong>never transmitted</strong> to WireData's servers or any third party</li>
+      <li>Is <strong>only accessible to you</strong> within the WireData workbench UI</li>
+      <li>Is <strong>automatically cleared</strong> when you close the capture session or restart the browser</li>
+    </ul>
+    <div class="highlight">
+      <strong>What is captured in regular (Side Panel) mode:</strong><br>
+      JSON response bodies only. Request URLs are sanitized to remove query parameters that may contain tokens or secrets.
+      Request headers and request bodies are <strong>never stored</strong>. Capture stops immediately when you close the side panel or navigate away.
+    </div>
+    <div class="highlight">
+      <strong>What is captured in DevTools mode:</strong><br>
+      Sanitized request URLs, response JSON, and (optionally) GraphQL operation names only. Authentication headers and credentials are never persisted.
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Permissions Explained</h2>
+    <ul>
+      <li><strong>activeTab</strong> — Temporarily inspect the tab you clicked the extension on. No persistent access to any website.</li>
+      <li><strong>scripting</strong> — Inject temporary fetch/XHR intercept hooks and DOM table extractors, removed when capture stops.</li>
+      <li><strong>sidePanel</strong> — Show the capture controller UI alongside your active tab.</li>
+      <li><strong>storage / unlimitedStorage</strong> — Store captured datasets locally in your browser (IndexedDB). Nothing is sent externally.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>5. Third-Party Services</h2>
+    <p>WireData uses the following open-source components, all bundled and served locally:</p>
+    <ul>
+      <li><strong>DuckDB-WASM</strong> — In-browser SQL engine. Runs entirely client-side. No network calls.</li>
+    </ul>
+    <p>WireData does <strong>not</strong> use any analytics SDKs, advertising networks, or external API services.</p>
+  </section>
+
+  <section>
+    <h2>6. Data Sharing</h2>
+    <p>
+      WireData does not sell, rent, share, or transfer any captured data or any information about you
+      to any third party under any circumstances.
+    </p>
+  </section>
+
+  <section>
+    <h2>7. Data Retention</h2>
+    <p>
+      All session state is stored in <code>chrome.storage.session</code>, which is automatically cleared
+      when the browser restarts or the extension is reloaded. Workspace data you choose to save
+      to local files stays on your machine and is under your full control.
+    </p>
+  </section>
+
+  <section>
+    <h2>8. Children's Privacy</h2>
+    <p>
+      WireData is a professional developer tool and is not directed at children under 13.
+      We do not knowingly collect information from children.
+    </p>
+  </section>
+
+  <section>
+    <h2>9. Changes to This Policy</h2>
+    <p>
+      If we make material changes to this privacy policy, we will update the "Last updated" date
+      at the top of this page and include a note in the Chrome Web Store changelog.
+    </p>
+  </section>
+
+  <section>
+    <h2>10. Contact</h2>
+    <p>
+      Questions about this privacy policy? Open an issue on the
+      <a href="https://github.com/ramca-cyber/wiredata-dev" target="_blank" rel="noopener">WireData GitHub repository</a>.
+    </p>
+  </section>
+</main>
+
+<footer>
+  WireData – Network Data Workbench &nbsp;·&nbsp; 
+  <a href="https://github.com/ramca-cyber/wiredata-dev">GitHub</a> &nbsp;·&nbsp;
+  © 2026 WireData Contributors
+</footer>
+
+</body>
+</html>
