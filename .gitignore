@@ -43,3 +43,6 @@ Thumbs.db
 release/
 *.tsbuildinfo
 
+# Generated store assets (run: node scripts/generate-store-assets.js)
+store-assets/
+
