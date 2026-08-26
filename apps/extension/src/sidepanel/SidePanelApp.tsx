@@ -42,9 +42,8 @@ export function SidePanelApp() {
     () => new WorkspaceManager(new InMemoryFileAdapter())
   );
   const [workspaceName, setWorkspaceName] = useState<string>('In-Memory Working Session');
-  // Capture is disabled until a real, persisted folder is attached. The
-  // in-memory adapter exists for tests/dev only — starting a capture against
-  // it means a user can record data, close the panel, and lose all of it.
+  // Whether a real on-disk folder has been selected. Capture works without
+  // one (in-memory) but data won't persist across panel reloads.
   const [hasPersistentWorkspace, setHasPersistentWorkspace] = useState<boolean>(false);
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
@@ -219,10 +218,6 @@ export function SidePanelApp() {
       }
     } else {
       // Start
-      if (!hasPersistentWorkspace) {
-        setStartError('Choose a workspace folder before starting capture.');
-        return;
-      }
       if (!activeTab?.id || !activeTab.url) {
         setStartError('Please open an active web page tab first.');
         return;
@@ -276,10 +271,6 @@ export function SidePanelApp() {
   const handleScrapeTable = async () => {
     setScrapeStatus(null);
 
-    if (!hasPersistentWorkspace) {
-      setScrapeStatus({ message: 'Choose a workspace folder before scraping.', tone: 'error' });
-      return;
-    }
     if (!activeTab?.id) {
       setScrapeStatus({ message: 'Please open an active web page tab first.', tone: 'error' });
       return;
@@ -472,39 +463,26 @@ export function SidePanelApp() {
           </div>
         )}
 
-        {!hasPersistentWorkspace && !isCapturing ? (
-          <button
-            onClick={handleSelectWorkspace}
-            style={{
-              background: 'linear-gradient(135deg, #0284c7, #2563eb)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: 6,
-              padding: '10px 16px',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            📁 Choose Workspace to Enable Capture
-          </button>
-        ) : (
-          <button
-            onClick={handleToggleCapture}
-            style={{
-              background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: 6,
-              padding: '10px 16px',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-              boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
-            }}
-          >
-            {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
-          </button>
+        <button
+          onClick={handleToggleCapture}
+          style={{
+            background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '10px 16px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)',
+          }}
+        >
+          {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
+        </button>
+        {!hasPersistentWorkspace && !isCapturing && (
+          <p style={{ margin: 0, fontSize: 11, color: colors.textDim, lineHeight: 1.4 }}>
+            💡 Pick a folder below to save captures to disk between sessions.
+          </p>
         )}
       </div>
 
@@ -557,16 +535,16 @@ export function SidePanelApp() {
 
         <button
           onClick={handleScrapeTable}
-          disabled={isScraping || !hasPersistentWorkspace}
+          disabled={isScraping}
           style={{
-            background: hasPersistentWorkspace ? colors.cardBg : colors.panelBg,
-            color: hasPersistentWorkspace ? colors.text : colors.textDim,
+            background: colors.cardBg,
+            color: colors.text,
             border: `1px solid ${colors.borderLight}`,
             borderRadius: 6,
             padding: '10px 16px',
             fontSize: 13,
             fontWeight: 600,
-            cursor: hasPersistentWorkspace && !isScraping ? 'pointer' : 'not-allowed',
+            cursor: isScraping ? 'not-allowed' : 'pointer',
             opacity: isScraping ? 0.7 : 1,
           }}
         >
