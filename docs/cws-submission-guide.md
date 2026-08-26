@@ -100,9 +100,22 @@ Check the following mandatory certification checkboxes in the CWS dashboard:
 
 ---
 
-## 4. Instructions for the Chrome Web Store Reviewer
+## 4. Instructions for the Chrome Web Store Reviewer (Under 500 Chars)
 
-Provide these clear, step-by-step verification instructions in the reviewer notes field:
+Paste this into the **"Notes for the reviewer"** field (exact length: 479 characters):
+
+```text
+Test in 1 min:
+1. Open https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html
+2. Click toolbar icon (W) to open Side Panel -> Click "Start Capture".
+3. Click "Generate JSON API Request" on page -> "orders" appears. Click TS/JSONL for instant export.
+4. Stop Capture -> Click "Open Full SQL Workbench" -> Candidates -> "Extract Combined Dataset" -> DuckDB SQL -> Run Query.
+5. All capture & DuckDB SQL run 100% locally on device. Zero data is sent to external servers.
+```
+
+---
+
+### Detailed Reviewer Instructions (For Reference)
 
 ```text
 Reviewer Testing Instructions for WireData:
