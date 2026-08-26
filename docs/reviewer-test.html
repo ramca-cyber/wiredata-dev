@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WireData Reviewer Test Page</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1116;
+      color: #cbd5e1;
+      line-height: 1.6;
+      padding: 32px 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    header {
+      background: linear-gradient(135deg, #0284c7 0%, #8b5cf6 100%);
+      padding: 24px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    header h1 { color: #fff; font-size: 1.5rem; margin-bottom: 6px; }
+    header p { color: rgba(255,255,255,0.9); font-size: 0.9rem; }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    h2 { font-size: 1.1rem; color: #f1f5f9; margin-bottom: 12px; }
+    p { margin-bottom: 12px; color: #94a3b8; font-size: 0.95rem; }
+    button {
+      background: linear-gradient(135deg, #0284c7, #2563eb);
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 12px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    #response-box {
+      margin-top: 14px;
+      padding: 12px;
+      background: #0f1116;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #38bdf8;
+      max-height: 200px;
+      overflow-y: auto;
+      display: none;
+      white-space: pre-wrap;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 0.88rem;
+    }
+    th, td {
+      border: 1px solid #334155;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    th { background: #0f1116; color: #f1f5f9; }
+    td { background: #1e293b; color: #cbd5e1; }
+    ol { padding-left: 20px; color: #94a3b8; font-size: 0.95rem; }
+    li { margin-bottom: 8px; }
+    code {
+      background: #0f1116;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #38bdf8;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>🧪 WireData Chrome Extension Reviewer Test Page</h1>
+    <p>Use this deterministic test harness to verify WireData capture and analysis</p>
+  </header>
+
+  <div class="card">
+    <h2>📋 Test Steps for Chrome Web Store Reviewers</h2>
+    <ol>
+      <li>Click the <strong>WireData toolbar icon (W)</strong> on this browser tab to open the Side Panel.</li>
+      <li>In the Side Panel, click <strong>"⏺ Start Capture"</strong> (REC status appears).</li>
+      <li>Click the <strong>"🚀 Generate JSON API Request"</strong> button below.</li>
+      <li>Notice the Side Panel immediately increments to <strong>1 response</strong> and detects the <code>orders</code> dataset.</li>
+      <li>Click <strong>"⏹ Stop Capture"</strong> in the Side Panel.</li>
+      <li>Click <strong>"Open Full Workbench ↗"</strong> — the captured <code>orders</code> collection is immediately loaded and ready for SQL queries.</li>
+      <li><em>(Optional)</em> In the Side Panel, click <strong>"🔲 Scrape Table"</strong> to test one-time DOM table extraction from the table below.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>1. Live JSON API Traffic Test</h2>
+    <p>Clicking this button fires a standard HTTP <code>fetch()</code> request for structured JSON data on this origin.</p>
+    <button id="fetch-btn" onclick="triggerJsonFetch()">🚀 Generate JSON API Request</button>
+    <div id="response-box"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. HTML Table Data Test (for Table Scraping)</h2>
+    <p>WireData's "Scrape Table" feature extracts structured data from standard HTML table elements.</p>
+    <table id="sample-table">
+      <thead>
+        <tr>
+          <th>Product ID</th>
+          <th>Product Name</th>
+          <th>Category</th>
+          <th>In Stock</th>
+          <th>Unit Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>PROD-101</td>
+          <td>Wireless Developer Keyboard</td>
+          <td>Hardware</td>
+          <td>Yes</td>
+          <td>$129.99</td>
+        </tr>
+        <tr>
+          <td>PROD-102</td>
+          <td>Ultra-Wide 4K Monitor</td>
+          <td>Hardware</td>
+          <td>Yes</td>
+          <td>$499.00</td>
+        </tr>
+        <tr>
+          <td>PROD-103</td>
+          <td>Ergonomic Standing Desk</td>
+          <td>Furniture</td>
+          <td>No</td>
+          <td>$650.00</td>
+        </tr>
+        <tr>
+          <td>PROD-104</td>
+          <td>USB-C Dual 4K Dock</td>
+          <td>Accessories</td>
+          <td>Yes</td>
+          <td>$89.50</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  async function triggerJsonFetch() {
+    const box = document.getElementById('response-box');
+    box.style.display = 'block';
+    box.textContent = 'Fetching ./reviewer-data.json ...';
+    try {
+      const res = await fetch('./reviewer-data.json');
+      const data = await res.json();
+      box.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      box.textContent = 'Fetch error: ' + err.message;
+    }
+  }
+</script>
+
+</body>
+</html>

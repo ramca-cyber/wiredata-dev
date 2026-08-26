@@ -190,6 +190,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         } catch {}
       }
 
+      const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.5';
       const freshSession: CaptureSession = {
         session_id: sessionId,
         name: 'Active Capture Session',
@@ -198,29 +199,31 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         navigation_history: [],
         capture_count: 0,
         body_bytes: 0,
-        application_version: '0.1.0',
+        application_version: appVersion,
         status: 'new',
       };
 
-      // Try restoring cached directory handle from IndexedDB
+      // Restore workspace (filesystem if permitted, or default shared IndexedDB)
       let hydrated = false;
+      let wm = workspaceManager;
+
       try {
         const cachedHandle = await DirectoryHandleManager.loadHandle();
         if (cachedHandle) {
           const verified = await DirectoryHandleManager.verifyPermission(cachedHandle, 'readwrite');
           if (verified) {
-            const fsAdapter = new FSDirectoryAdapter(cachedHandle);
-            const wm = new WorkspaceManager(fsAdapter);
-            await wm.openOrCreateWorkspace();
+            wm = new WorkspaceManager(new FSDirectoryAdapter(cachedHandle));
             setWorkspaceManager(wm);
             setWorkspaceName((cachedHandle as any).name || 'Workspace Folder');
-            hydrated = await hydrateFromWorkspace(wm);
           }
-        } else {
-          await workspaceManager.openOrCreateWorkspace();
         }
+        await wm.openOrCreateWorkspace();
+        hydrated = await hydrateFromWorkspace(wm);
       } catch {
-        await workspaceManager.openOrCreateWorkspace();
+        try {
+          await workspaceManager.openOrCreateWorkspace();
+          hydrated = await hydrateFromWorkspace(workspaceManager);
+        } catch {}
       }
 
       if (!hydrated) {
