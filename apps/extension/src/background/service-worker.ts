@@ -54,13 +54,25 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
     }
   }
 
-  function extractGraphQLOperationFromUrl(url: string): string | undefined {
+  function extractGraphQLOperation(url: string, body?: any): string | undefined {
     try {
       const parsed = new URL(url, window.location.origin);
-      return parsed.searchParams.get('operationName') || undefined;
-    } catch {
-      return undefined;
+      const fromUrl = parsed.searchParams.get('operationName');
+      if (fromUrl) return fromUrl;
+    } catch {}
+    if (body) {
+      try {
+        if (typeof body === 'string') {
+          if (body.includes('operationName')) {
+            const parsed = JSON.parse(body);
+            if (parsed && typeof parsed.operationName === 'string') {
+              return parsed.operationName;
+            }
+          }
+        }
+      } catch {}
     }
+    return undefined;
   }
 
   const w = window as any;
@@ -88,7 +100,7 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
     const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
     const sanitized = sanitizeUrl(rawUrl);
     const sanitizedPageUrl = sanitizeUrl(window.location.href);
-    const graphqlOp = extractGraphQLOperationFromUrl(rawUrl);
+    const graphqlOp = extractGraphQLOperation(rawUrl, init?.body);
 
     const response = await nativeFetch.apply(this, [input, init] as Parameters<typeof fetch>);
 
@@ -154,7 +166,7 @@ function installPageCaptureHook(sessionId: string, tabId: number): void {
   XMLHttpRequest.prototype.send = function (this: any, body?: Document | XMLHttpRequestBodyInit | null) {
     const data = this[XHR_KEY];
     if (data) {
-      data.graphqlOp = extractGraphQLOperationFromUrl(data.rawUrl);
+      data.graphqlOp = extractGraphQLOperation(data.rawUrl, body);
       this.addEventListener('load', function (this: XMLHttpRequest) {
         try {
           const contentType = this.getResponseHeader('content-type');
