@@ -27,8 +27,10 @@ import { PageNetworkCaptureAdapter } from '../adapters/page.js';
 import { captureTableFromActiveTab } from '../adapters/dom-table.js';
 
 interface DiscoveredItem {
-  id: string; // mode:route:pointer
+  id: string; // mode:domain:route:pointer
   name: string;
+  domain: string;
+  pageUrl: string;
   route: string;
   pointer: string;
   rowCount: number;
@@ -106,17 +108,20 @@ export function SidePanelApp() {
   const [startError, setStartError] = useState<string | null>(null);
   const [isScraping, setIsScraping] = useState<boolean>(false);
   const [scrapeStatus, setScrapeStatus] = useState<{ message: string; tone: 'success' | 'warning' | 'error' } | null>(null);
+  const [domainPermissionGranted, setDomainPermissionGranted] = useState<boolean | null>(null);
 
   // Metrics & Discovered Collections
   const [captureCount, setCaptureCount] = useState<number>(0);
   const [totalBytes, setTotalBytes] = useState<number>(0);
   const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
   const [allHistoryItems, setAllHistoryItems] = useState<DiscoveredItem[]>([]);
-  const [viewScope, setViewScope] = useState<'current' | 'all'>('current');
+  const [viewScope, setViewScope] = useState<'page' | 'domain' | 'all'>('domain');
+  const [selectedDomainFilter, setSelectedDomainFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [copiedBadge, setCopiedBadge] = useState<string | null>(null);
   const [previewItem, setPreviewItem] = useState<DiscoveredItem | null>(null);
   const [previewTab, setPreviewTab] = useState<'table' | 'typescript' | 'schema' | 'json'>('table');
+  const [combinationFeedback, setCombinationFeedback] = useState<string | null>(null);
 
   // Workspace: defaults to shared browser-local IndexedDB storage
   const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
@@ -127,6 +132,54 @@ export function SidePanelApp() {
 
   const adapterRef = useRef<PageNetworkCaptureAdapter | null>(null);
   const pendingWritesRef = useRef<Set<Promise<unknown>>>(new Set());
+
+  // Helper to extract hostname from URL
+  const getDomainFromUrl = (rawUrl?: string): string => {
+    if (!rawUrl) return 'Unknown Domain';
+    try {
+      return new URL(rawUrl).hostname || rawUrl;
+    } catch {
+      return rawUrl;
+    }
+  };
+
+  const currentTabDomain = getDomainFromUrl(activeTab?.url);
+
+  // Check active tab domain permission status
+  const checkDomainPermission = async (tabUrl?: string) => {
+    if (!tabUrl || !tabUrl.startsWith('http')) {
+      setDomainPermissionGranted(null);
+      return;
+    }
+    if (typeof chrome !== 'undefined' && chrome.permissions?.contains) {
+      try {
+        const originPattern = `${new URL(tabUrl).origin}/*`;
+        const has = await chrome.permissions.contains({ origins: [originPattern] });
+        setDomainPermissionGranted(has);
+      } catch {
+        setDomainPermissionGranted(false);
+      }
+    }
+  };
+
+  const syncActiveTab = async () => {
+    if (typeof chrome === 'undefined' || !chrome.tabs?.query) return;
+    try {
+      let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (!tabs[0] || !tabs[0].url || tabs[0].url.startsWith('chrome-extension://')) {
+        tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      }
+      if (tabs[0]?.id) {
+        const foundTab = {
+          id: tabs[0].id,
+          url: tabs[0].url || tabs[0].pendingUrl || '',
+          title: tabs[0].title || '',
+        };
+        setActiveTab(foundTab);
+        checkDomainPermission(foundTab.url);
+      }
+    } catch {}
+  };
 
   const loadAllHistory = async (wm: WorkspaceManager) => {
     try {
@@ -139,8 +192,11 @@ export function SidePanelApp() {
           if (!cap.response.body_hash) continue;
           const body = await wm.getBodyObject(cap.response.body_hash);
           if (!body) continue;
-          const cands = detectCandidateCollections(body);
-          for (const cand of cands) {
+
+          const candidates = detectCandidateCollections(body);
+          const domain = getDomainFromUrl(cap.request.sanitized_url || sess.initial_page_url);
+
+          for (const cand of candidates) {
             let extractedRows: Record<string, any>[] = [];
             if (!cand.pointer || cand.pointer === '' || cand.pointer === '/') {
               extractedRows = Array.isArray(body) ? body : [];
@@ -156,21 +212,25 @@ export function SidePanelApp() {
             }
 
             if (extractedRows.length > 0) {
-              const name = cand.suggested_name === 'rows' && cap.capture_mode === 'dom' ? 'scraped_table' : cand.suggested_name;
-              const colKey = `${cap.capture_mode}:${cap.request.route_template || cap.request.sanitized_url}:${cand.pointer}`;
+              const colKey = `${domain}:${cand.suggested_name}:${cand.pointer}`;
               const existing = itemsMap.get(colKey);
-              const combined = existing ? [...existing.rows, ...extractedRows] : extractedRows;
-              const count = existing ? existing.capturesCount + 1 : 1;
-              const refs = existing ? [...existing.captureRefs, { sessionId: sess.session_id, captureId: cap.capture_id, bodyHash: cap.response.body_hash }] : [{ sessionId: sess.session_id, captureId: cap.capture_id, bodyHash: cap.response.body_hash }];
+              const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
+              const capturesCount = existing ? existing.capturesCount + 1 : 1;
+              const refs = existing
+                ? [...existing.captureRefs, { sessionId: sess.session_id, captureId: cap.capture_id, bodyHash: cap.response.body_hash }]
+                : [{ sessionId: sess.session_id, captureId: cap.capture_id, bodyHash: cap.response.body_hash }];
+
               itemsMap.set(colKey, {
                 id: colKey,
-                name,
+                name: cand.suggested_name,
+                domain,
+                pageUrl: sess.initial_page_url || cap.request.sanitized_url,
                 route: cap.request.route_template || cap.request.sanitized_url,
                 pointer: cand.pointer,
-                rowCount: combined.length,
-                capturesCount: count,
-                source: cap.capture_mode === 'dom' ? 'DOM Table' : `JSON API (${cap.request.method})`,
-                rows: combined,
+                rowCount: combinedRows.length,
+                capturesCount,
+                source: `${domain} (JSON API)`,
+                rows: combinedRows,
                 captureRefs: refs,
               });
             }
@@ -189,6 +249,8 @@ export function SidePanelApp() {
     setCaptureCount(prev => prev + 1);
     setTotalBytes(prev => prev + (capture.response.body_size || 0));
 
+    const domain = getDomainFromUrl(capture.request.sanitized_url || activeTab?.url);
+
     if (candidates && candidates.length > 0) {
       for (const cand of candidates) {
         let extractedRows: Record<string, any>[] = [];
@@ -206,7 +268,7 @@ export function SidePanelApp() {
         }
 
         if (extractedRows.length > 0) {
-          const colKey = `${capture.capture_mode}:${capture.request.route_template || capture.request.sanitized_url}:${cand.pointer}`;
+          const colKey = `${domain}:${cand.suggested_name}:${cand.pointer}`;
           setDiscoveredItems(prev => {
             const existing = prev.find(x => x.id === colKey);
             const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
@@ -215,11 +277,13 @@ export function SidePanelApp() {
             const updatedItem: DiscoveredItem = {
               id: colKey,
               name: cand.suggested_name,
+              domain,
+              pageUrl: activeTab?.url || capture.request.sanitized_url,
               route: capture.request.route_template || capture.request.sanitized_url,
               pointer: cand.pointer,
               rowCount: combinedRows.length,
               capturesCount,
-              source: `JSON API (${capture.request.method})`,
+              source: `${domain} (JSON API)`,
               rows: combinedRows,
               captureRefs: refs,
             };
@@ -238,34 +302,12 @@ export function SidePanelApp() {
 
   useEffect(() => {
     const init = async () => {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const pId = params.get('tabId');
-        const pUrl = params.get('tabUrl');
-        if (pId) {
-          setActiveTab({ id: Number(pId), url: pUrl ? decodeURIComponent(pUrl) : '', title: '' });
-        }
-      } catch {}
+      await syncActiveTab();
 
-      if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-        try {
-          let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-          if (!tabs[0]) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (tabs[0]?.id) {
-            setActiveTab(prev => ({
-              id: tabs[0].id ?? prev?.id,
-              url: tabs[0].url || tabs[0].pendingUrl || prev?.url || '',
-              title: tabs[0].title || prev?.title || '',
-            }));
-          }
-        } catch (err) {
-          console.warn('Tab query error:', err);
-        }
-      }
-
-      let wm = workspaceManager;
+      // Check persistent workspace
       try {
         const cachedHandle = await DirectoryHandleManager.loadHandle();
+        let wm = workspaceManager;
         if (cachedHandle) {
           const verified = await DirectoryHandleManager.verifyPermission(cachedHandle, 'readwrite');
           if (verified) {
@@ -293,11 +335,11 @@ export function SidePanelApp() {
       }
 
       try {
-        const sessions = await wm.listSessions();
+        const sessions = await workspaceManager.listSessions();
         const staleCapturing = sessions.filter((s: CaptureSession) => s.status === 'capturing');
         for (const s of staleCapturing) {
           if (!liveState?.isCapturing || liveState.activeSessionId !== s.session_id) {
-            await wm.saveSession({
+            await workspaceManager.saveSession({
               ...s,
               status: 'recovered',
               ended_at: s.ended_at || new Date().toISOString(),
@@ -324,19 +366,30 @@ export function SidePanelApp() {
 
     const tabActivatedListener = async (activeInfo: { tabId: number; windowId: number }) => {
       if (isCapturingRef.current) return;
-      if (typeof chrome !== 'undefined' && chrome.tabs?.get) {
-        try {
-          const tab = await chrome.tabs.get(activeInfo.tabId);
-          if (tab?.id) {
-            setActiveTab({ id: tab.id, url: tab.url || tab.pendingUrl || '', title: tab.title || '' });
-          }
-        } catch {}
+      await syncActiveTab();
+    };
+
+    const tabUpdatedListener = (tabId: number, changeInfo: any, tab: any) => {
+      if (isCapturingRef.current) return;
+      if (tab.active) {
+        setActiveTab({ id: tab.id, url: tab.url || tab.pendingUrl || '', title: tab.title || '' });
+        checkDomainPermission(tab.url || tab.pendingUrl);
+      }
+    };
+
+    const windowFocusListener = () => {
+      if (!isCapturingRef.current) {
+        syncActiveTab();
       }
     };
 
     if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
       chrome.tabs.onActivated.addListener(tabActivatedListener);
     }
+    if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
+      chrome.tabs.onUpdated.addListener(tabUpdatedListener);
+    }
+    window.addEventListener('focus', windowFocusListener);
 
     return () => {
       if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
@@ -345,6 +398,10 @@ export function SidePanelApp() {
       if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
         chrome.tabs.onActivated.removeListener(tabActivatedListener);
       }
+      if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
+        chrome.tabs.onUpdated.removeListener(tabUpdatedListener);
+      }
+      window.removeEventListener('focus', windowFocusListener);
     };
   }, []);
 
@@ -546,11 +603,13 @@ export function SidePanelApp() {
           const updatedItem: DiscoveredItem = {
             id: colKey,
             name: tableName,
+            domain: currentTabDomain,
+            pageUrl: targetTab.url || outcome.capture.request.sanitized_url,
             route: outcome.capture.request.sanitized_url,
             pointer: '/',
             rowCount: combinedRows.length,
             capturesCount,
-            source: outcome.strategy === 'table' ? 'DOM Table' : 'Virtualized Grid',
+            source: outcome.strategy === 'table' ? `${currentTabDomain} (DOM Table)` : `${currentTabDomain} (Virtualized Grid)`,
             rows: combinedRows,
             captureRefs: refs,
           };
@@ -683,35 +742,141 @@ export function SidePanelApp() {
     }
   };
 
+  const handleCombineMatchingDatasets = async (itemsToCombine: DiscoveredItem[]) => {
+    if (itemsToCombine.length < 2) return;
+    try {
+      const combinedRows: Record<string, any>[] = [];
+      const seenHashes = new Set<string>();
+      let primaryName = itemsToCombine[0].name.replace(/_combined$/, '');
+
+      for (const item of itemsToCombine) {
+        for (const r of item.rows) {
+          const serialized = JSON.stringify(r);
+          if (!seenHashes.has(serialized)) {
+            seenHashes.add(serialized);
+            combinedRows.push(r);
+          }
+        }
+      }
+
+      const combinedItemName = `${primaryName}_combined`;
+      const colKey = `combined:${currentTabDomain}:${combinedItemName}:/`;
+      const combinedItem: DiscoveredItem = {
+        id: colKey,
+        name: combinedItemName,
+        domain: currentTabDomain,
+        pageUrl: activeTab?.url || '',
+        route: 'combined/datasets',
+        pointer: '/',
+        rowCount: combinedRows.length,
+        capturesCount: itemsToCombine.reduce((acc, x) => acc + x.capturesCount, 0),
+        source: `Combined (${itemsToCombine.length} datasets)`,
+        rows: combinedRows,
+        captureRefs: itemsToCombine.flatMap(x => x.captureRefs),
+      };
+
+      setDiscoveredItems(prev => [combinedItem, ...prev.filter(x => x.id !== colKey)]);
+      setCombinationFeedback(`Combined ${itemsToCombine.length} datasets into ${combinedItemName} (${combinedRows.length} rows)!`);
+      setTimeout(() => setCombinationFeedback(null), 3500);
+    } catch (e: any) {
+      setCombinationFeedback(`Failed to combine: ${e.message}`);
+    }
+  };
+
   const isWorkbenchTab = !!activeTab?.url?.includes('workbench.html');
   const isRestrictedPage = !activeTab?.url || activeTab.url.startsWith('chrome');
-  const hostName = activeTab?.url && !isRestrictedPage ? (() => { try { return new URL(activeTab.url).hostname; } catch { return activeTab.url; } })() : null;
+  const hostName = activeTab?.url && !isRestrictedPage ? currentTabDomain : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: colors.bg, fontFamily: fonts.body, color: colors.text, padding: 16, userSelect: 'none', overflowY: 'auto' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 24, height: 24, borderRadius: 6, background: 'linear-gradient(135deg, #0284c7, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, color: '#ffffff' }}>W</div>
           <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.02em' }}>WireData</span>
           <span style={{ fontSize: 10, color: colors.textDim, fontFamily: fonts.mono }}>v{appVersion}</span>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            onClick={handleOpenWorkbench}
+            title="Open Full SQL Data Workbench"
+            style={{
+              background: colors.cardBg,
+              border: `1px solid ${colors.borderLight}`,
+              color: colors.primaryLight,
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            📊 Workbench ↗
+          </button>
+        </div>
       </div>
 
-      {/* Target Tab Host Card */}
+      {/* Target Tab Host & Domain Card */}
       <div style={{ background: colors.cardBg, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 10, marginBottom: 12 }}>
-        <div style={{ fontSize: 10, color: colors.textDim, textTransform: 'uppercase', fontWeight: 700, marginBottom: 2 }}>Target Page</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <span style={{ fontSize: 10, color: colors.textDim, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>Active Web Page</span>
+          <button
+            onClick={syncActiveTab}
+            title="Re-sync current active browser tab"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: colors.primaryLight,
+              fontSize: 11,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              padding: 0,
+            }}
+          >
+            🔄 Sync Tab
+          </button>
+        </div>
+
         {hostName ? (
-          <div style={{ fontSize: 13, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>{hostName}</div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: colors.primaryLight, wordBreak: 'break-all', fontFamily: fonts.mono }}>
+                {hostName}
+              </div>
+              {domainPermissionGranted !== null && (
+                <span
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: domainPermissionGranted ? '#10b98122' : `${colors.warning}22`,
+                    color: domainPermissionGranted ? '#10b981' : colors.warning,
+                    border: `1px solid ${domainPermissionGranted ? '#10b98144' : `${colors.warning}44`}`,
+                  }}
+                >
+                  {domainPermissionGranted ? '✓ Authorized' : '🔒 Prompt on Capture'}
+                </span>
+              )}
+            </div>
+            {activeTab?.title && (
+              <div style={{ fontSize: 11, color: colors.textDim, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {activeTab.title}
+              </div>
+            )}
+          </div>
         ) : isWorkbenchTab ? (
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: colors.primaryLight }}>📊 WireData Workbench Active</div>
-            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>Switch to any website tab to record live API traffic.</div>
+            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>Switch to any website tab to record live API traffic or scrape tables.</div>
           </div>
         ) : (
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: colors.warning }}>⚠️ No Active Web Page</div>
-            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>Open any website to record JSON traffic.</div>
+            <div style={{ fontSize: 11, color: colors.textDim, marginTop: 2 }}>Open or focus any website to record JSON traffic.</div>
           </div>
         )}
       </div>
@@ -734,34 +899,73 @@ export function SidePanelApp() {
           <div style={{ fontSize: 11, color: colors.error, background: `${colors.error}11`, border: `1px solid ${colors.error}44`, borderRadius: 6, padding: '6px 8px' }}>{startError}</div>
         )}
         <div style={{ fontSize: 10, color: colors.textDim, lineHeight: 1.4 }}>
-          🔒 Captures JSON response bodies and sanitized request/page URLs from this tab only. Stored locally on your device; nothing is sent to WireData. Stop Capture or close the panel to end collection.
+          🔒 Captures JSON response bodies and sanitized request URLs from this tab only. Stored locally on your device; nothing is sent to WireData.
         </div>
-        <button onClick={handleToggleCapture} style={{ background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)', color: '#ffffff', border: 'none', borderRadius: 6, padding: '10px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)' }}>{isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}</button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <button onClick={handleToggleCapture} style={{ background: isCapturing ? colors.error : 'linear-gradient(135deg, #0284c7, #2563eb)', color: '#ffffff', border: 'none', borderRadius: 6, padding: '10px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: isCapturing ? `0 0 12px ${colors.error}44` : '0 4px 12px rgba(2, 132, 199, 0.3)' }}>
+            {isCapturing ? '⏹ Stop Capture' : '⏺ Start Capture'}
+          </button>
+          <button
+            onClick={handleScrapeTable}
+            disabled={isScraping || isCapturing}
+            style={{
+              background: colors.cardBg,
+              border: `1px solid ${colors.borderLight}`,
+              color: isScraping ? colors.textDim : colors.text,
+              borderRadius: 6,
+              padding: '10px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: isScraping || isCapturing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {isScraping ? '⏳ Scraping...' : '📑 Scrape Table'}
+          </button>
+        </div>
+        {scrapeStatus && (
+          <div style={{ fontSize: 11, padding: '6px 8px', borderRadius: 6, background: scrapeStatus.tone === 'success' ? '#10b98122' : scrapeStatus.tone === 'warning' ? `${colors.warning}22` : `${colors.error}22`, color: scrapeStatus.tone === 'success' ? '#10b981' : scrapeStatus.tone === 'warning' ? colors.warning : colors.error, border: `1px solid ${scrapeStatus.tone === 'success' ? '#10b98144' : scrapeStatus.tone === 'warning' ? `${colors.warning}44` : `${colors.error}44`}` }}>
+            {scrapeStatus.message}
+          </div>
+        )}
       </div>
 
       {/* Discovered Collections & Direct Actions (The Power Section) */}
       {(() => {
-        const allItems = viewScope === 'current' ? discoveredItems : (allHistoryItems.length > 0 ? allHistoryItems : discoveredItems);
+        const rawPool = viewScope === 'page'
+          ? (discoveredItems.filter(x => !activeTab?.url || x.pageUrl === activeTab.url || x.route === activeTab.url))
+          : viewScope === 'domain'
+          ? (discoveredItems.filter(x => !currentTabDomain || x.domain === currentTabDomain))
+          : (allHistoryItems.length > 0 ? allHistoryItems : discoveredItems);
+
+        // Compute available domains for filter chips
+        const uniqueDomains = Array.from(new Set(rawPool.map(x => x.domain).filter(Boolean)));
+
+        const domainFiltered = selectedDomainFilter === 'ALL'
+          ? rawPool
+          : rawPool.filter(x => x.domain === selectedDomainFilter);
+
         const visibleItems = searchQuery.trim()
-          ? allItems.filter(item =>
+          ? domainFiltered.filter(item =>
               item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              item.domain.toLowerCase().includes(searchQuery.toLowerCase()) ||
               (item.rows[0] && Object.keys(item.rows[0]).some(k => k.toLowerCase().includes(searchQuery.toLowerCase())))
             )
-          : allItems;
+          : domainFiltered;
 
-        if (allItems.length === 0 && discoveredItems.length === 0) return null;
+        if (discoveredItems.length === 0 && allHistoryItems.length === 0) return null;
 
         return (
           <div style={{ marginBottom: 12 }}>
+            {/* Scope Bar */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 6 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, letterSpacing: '0.04em' }}>
-                  📦 Collections ({visibleItems.length})
+                  📦 Datasets ({visibleItems.length})
                 </span>
-                {allItems.length > 0 && (
+                {visibleItems.length > 0 && (
                   <button
                     onClick={handleClearAllItems}
-                    title="Clear all discovered items"
+                    title="Clear current dataset items"
                     style={{
                       background: 'transparent',
                       border: `1px solid ${colors.error}44`,
@@ -779,19 +983,34 @@ export function SidePanelApp() {
               </div>
               <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: 2 }}>
                 <button
-                  onClick={() => setViewScope('current')}
+                  onClick={() => setViewScope('page')}
                   style={{
-                    background: viewScope === 'current' ? colors.cardBg : 'transparent',
-                    color: viewScope === 'current' ? colors.primaryLight : colors.textDim,
+                    background: viewScope === 'page' ? colors.cardBg : 'transparent',
+                    color: viewScope === 'page' ? colors.primaryLight : colors.textDim,
                     border: 'none',
                     borderRadius: 3,
-                    padding: '2px 8px',
+                    padding: '2px 6px',
                     fontSize: 10,
                     fontWeight: 700,
                     cursor: 'pointer',
                   }}
                 >
-                  🌐 Current Page
+                  Page
+                </button>
+                <button
+                  onClick={() => setViewScope('domain')}
+                  style={{
+                    background: viewScope === 'domain' ? colors.cardBg : 'transparent',
+                    color: viewScope === 'domain' ? colors.primaryLight : colors.textDim,
+                    border: 'none',
+                    borderRadius: 3,
+                    padding: '2px 6px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Domain
                 </button>
                 <button
                   onClick={async () => {
@@ -803,23 +1022,97 @@ export function SidePanelApp() {
                     color: viewScope === 'all' ? colors.primaryLight : colors.textDim,
                     border: 'none',
                     borderRadius: 3,
-                    padding: '2px 8px',
+                    padding: '2px 6px',
                     fontSize: 10,
                     fontWeight: 700,
                     cursor: 'pointer',
                   }}
                 >
-                  📁 All History
+                  All
                 </button>
               </div>
             </div>
 
-            {/* Quick Filter Search */}
-            {allItems.length > 1 && (
+            {/* Domain Filter Pills */}
+            {uniqueDomains.length > 1 && (
+              <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 6, marginBottom: 6 }}>
+                <button
+                  onClick={() => setSelectedDomainFilter('ALL')}
+                  style={{
+                    background: selectedDomainFilter === 'ALL' ? colors.primaryLight : colors.cardBg,
+                    color: selectedDomainFilter === 'ALL' ? '#ffffff' : colors.textDim,
+                    border: `1px solid ${colors.borderLight}`,
+                    borderRadius: 12,
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  All Domains ({rawPool.length})
+                </button>
+                {uniqueDomains.map(d => {
+                  const count = rawPool.filter(x => x.domain === d).length;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setSelectedDomainFilter(d)}
+                      style={{
+                        background: selectedDomainFilter === d ? colors.primaryLight : colors.cardBg,
+                        color: selectedDomainFilter === d ? '#ffffff' : colors.textDim,
+                        border: `1px solid ${colors.borderLight}`,
+                        borderRadius: 12,
+                        padding: '2px 8px',
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {d} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Smart Combiner Action Banner */}
+            {visibleItems.length >= 2 && (
+              <div style={{ background: `${colors.primaryLight}11`, border: `1px dashed ${colors.primaryLight}44`, borderRadius: 8, padding: 8, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: 11, color: colors.primaryLight }}>
+                  💡 <strong>{visibleItems.length} datasets</strong> detected in current view.
+                </div>
+                <button
+                  onClick={() => handleCombineMatchingDatasets(visibleItems)}
+                  style={{
+                    background: 'linear-gradient(135deg, #0284c7, #8b5cf6)',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: 4,
+                    padding: '4px 10px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  ⚡ Combine Datasets
+                </button>
+              </div>
+            )}
+
+            {combinationFeedback && (
+              <div style={{ fontSize: 11, background: '#10b98122', border: '1px solid #10b98144', color: '#10b981', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
+                {combinationFeedback}
+              </div>
+            )}
+
+            {/* Quick Search */}
+            {rawPool.length > 2 && (
               <div style={{ marginBottom: 8 }}>
                 <input
                   type="text"
-                  placeholder="🔍 Filter collections or fields..."
+                  placeholder="🔍 Filter datasets or column names..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   style={{
@@ -856,12 +1149,14 @@ export function SidePanelApp() {
                       <span style={{ fontWeight: 700, fontSize: 13, color: colors.primaryLight, fontFamily: fonts.mono }}>
                         {item.name}
                       </span>
-                      <span style={{ fontSize: 11, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
-                        {item.rowCount} rows{item.capturesCount > 1 ? ` (${item.capturesCount} captures)` : ''}
+                      <span style={{ fontSize: 10, color: colors.textDim, background: `${colors.panelBg}`, padding: '2px 6px', borderRadius: 4 }}>
+                        {item.rowCount} rows{item.capturesCount > 1 ? ` (${item.capturesCount} reqs)` : ''}
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 10, color: colors.textDim }}>{item.source}</span>
+                      <span style={{ fontSize: 10, color: colors.textDim, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.domain}>
+                        {item.domain}
+                      </span>
                       <button
                         onClick={() => handleRemoveItem(item.id)}
                         title={`Remove ${item.name}`}
