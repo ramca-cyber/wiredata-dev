@@ -1,7 +1,7 @@
 # Chrome Web Store Submission & Reviewer Package
 
-**Version:** 0.1.7  
-**Package Artifact:** `release/wiredata-extension-v0.1.7.zip`  
+**Version:** 0.1.8  
+**Package Artifact:** `release/wiredata-extension-v0.1.8.zip`  
 **Live Privacy Policy:** `https://ramca-cyber.github.io/wiredata-dev/privacy.html`  
 **Live Reviewer Test Page:** `https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html`
 

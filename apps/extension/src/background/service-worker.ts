@@ -297,26 +297,20 @@ async function stopCaptureForTab(tabId: number): Promise<void> {
   }
 }
 
-// 1. Disable automatic global side panel so toolbar click invokes action listener with activeTab
-chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false })?.catch?.(() => {});
+// 1. Configure default side panel behavior to open directly on action left-click
+chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false })?.catch?.(() => {});
+  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
 });
 
-// Action click gesture-driven tab-specific side panel binding
-chrome.action.onClicked.addListener(async tab => {
+// Fallback action click listener in case setPanelBehavior is not supported
+chrome.action.onClicked.addListener(tab => {
   if (tab.id) {
-    try {
-      const urlParam = tab.url ? `?tabId=${tab.id}&tabUrl=${encodeURIComponent(tab.url)}` : `?tabId=${tab.id}`;
-      await chrome.sidePanel.setOptions({
-        tabId: tab.id,
-        path: `sidepanel.html${urlParam}`,
-        enabled: true,
-      });
-      await chrome.sidePanel.open({ tabId: tab.id });
-    } catch (err) {
-      console.warn('Side panel open error:', err);
-    }
+    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {
+      if (tab.windowId) {
+        chrome.sidePanel.open({ windowId: tab.windowId }).catch(console.warn);
+      }
+    });
   }
 });
 

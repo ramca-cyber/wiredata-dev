@@ -26,7 +26,7 @@ describe('Workspace Storage & Serialization', () => {
     const metadata = await manager.getMetadata();
     expect(metadata).not.toBeNull();
     expect(metadata?.format_version).toBe(1);
-    expect(metadata?.application_version).toBe('0.1.7');
+    expect(metadata?.application_version).toBe('0.1.8');
   });
 
   it('saves and lists capture sessions', async () => {
@@ -269,7 +269,7 @@ describe('Workspace Storage & Serialization', () => {
       navigation_history: [],
       capture_count: 1,
       body_bytes: 10,
-      application_version: '0.1.7',
+      application_version: '0.1.8',
       status: 'complete',
     });
     await manager.saveCapture(sessionId, capture, rawBody);
@@ -300,7 +300,7 @@ describe('Workspace Storage & Serialization', () => {
       navigation_history: [],
       capture_count: 0,
       body_bytes: 0,
-      application_version: '0.1.7',
+      application_version: '0.1.8',
       status: 'new',
     });
 
