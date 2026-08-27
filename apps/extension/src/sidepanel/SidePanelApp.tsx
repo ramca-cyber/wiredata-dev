@@ -952,8 +952,6 @@ export function SidePanelApp() {
             )
           : domainFiltered;
 
-        if (discoveredItems.length === 0 && allHistoryItems.length === 0) return null;
-
         return (
           <div style={{ marginBottom: 12 }}>
             {/* Scope Bar */}
@@ -1130,8 +1128,14 @@ export function SidePanelApp() {
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {visibleItems.map(item => (
+            {visibleItems.length === 0 ? (
+              <div style={{ background: colors.panelBg, border: `1px dashed ${colors.borderLight}`, borderRadius: 8, padding: '16px 12px', textAlign: 'center', color: colors.textDim, fontSize: 11 }}>
+                <div>No datasets recorded for {viewScope === 'page' ? 'this page path' : viewScope === 'domain' ? `${currentTabDomain || 'this domain'}` : 'this workspace'}.</div>
+                <div style={{ marginTop: 4, fontSize: 10, color: colors.textDim }}>Click <strong>Start Capture</strong> or <strong>Scrape Table</strong> to record data.</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {visibleItems.map(item => (
                 <div
                   key={item.id}
                   style={{
@@ -1269,23 +1273,12 @@ export function SidePanelApp() {
                 </div>
               ))}
             </div>
-          </div>
-        );
-      })()}
-
-      {/* Scrape HTML Table */}
-      <div style={{ background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 8, padding: 12, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: colors.text }}>🔲 Scrape HTML Table</div>
-            <div style={{ fontSize: 10, color: colors.textDim, marginTop: 2 }}>One-time local extraction of table/grid text from this page.</div>
-          </div>
-          <button onClick={handleScrapeTable} disabled={isScraping} style={{ background: colors.cardBg, color: colors.text, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: isScraping ? 'not-allowed' : 'pointer' }}>{isScraping ? 'Scraping…' : 'Scrape Now'}</button>
+          )}
         </div>
-        {scrapeStatus && (
-          <div style={{ fontSize: 11, color: scrapeStatus.tone === 'error' ? colors.error : scrapeStatus.tone === 'warning' ? colors.warning : colors.success, background: `${scrapeStatus.tone === 'error' ? colors.error : scrapeStatus.tone === 'warning' ? colors.warning : colors.success}11`, borderRadius: 4, padding: '6px 8px' }}>{scrapeStatus.message}</div>
-        )}
-      </div>
+      );
+    })()}
+
+
 
       {/* Primary Transition Action to Full Workbench */}
       <div style={{ marginTop: 'auto', paddingTop: 10 }}>
