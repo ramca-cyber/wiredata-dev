@@ -310,7 +310,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
       const updated: WorkspaceMetadata = {
         ...existing,
         last_opened_at: new Date().toISOString(),
-        application_version: metadata?.application_version || '0.1.8',
+        application_version: metadata?.application_version || '0.1.9',
       };
       await this.adapter.writeFile('workspace.json', JSON.stringify(updated, null, 2));
       return updated;
@@ -321,7 +321,7 @@ export class WorkspaceManager implements IWorkspaceStorage {
       workspace_id: metadata?.workspace_id || generateULID(),
       created_at: metadata?.created_at || new Date().toISOString(),
       last_opened_at: new Date().toISOString(),
-      application_version: metadata?.application_version || '0.1.8',
+      application_version: metadata?.application_version || '0.1.9',
     };
     await this.adapter.writeFile('workspace.json', JSON.stringify(meta, null, 2));
     await this.adapter.createDir('sessions');

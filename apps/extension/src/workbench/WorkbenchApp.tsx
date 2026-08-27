@@ -729,8 +729,8 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       navigation_history: [],
       capture_count: 0,
       body_bytes: 0,
-      application_version: '0.1.8',
-      status: 'new',
+      application_version: '0.1.9',
+      status: 'complete',
     };
     setActiveSession(newSession);
     await workspaceManager.saveSession(newSession);
@@ -889,7 +889,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
             Network Data Workbench
           </span>
           <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>
-            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.8'}
+            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.9'}
           </span>
           <span
             data-testid="duckdb-status"

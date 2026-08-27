@@ -66,6 +66,11 @@ Provides the companion user interface alongside the active browser tab, displayi
 Used only for chrome.storage.session to preserve ephemeral active-capture control state—active tab ID, session ID, origin, and capture status—across Manifest V3 service-worker suspension. Captured website content and datasets are not stored through this permission.
 ```
 
+### `host_permissions`
+```text
+Required for chrome.scripting.executeScript to inject the client-side network interceptor and HTML table scraper on the user-selected active web tab when the user clicks 'Start Capture' or 'Scrape HTML Table' inside the side panel companion.
+```
+
 ---
 
 ## 3. Privacy Practices Tab (August 2026 CWS Policy Compliant)
