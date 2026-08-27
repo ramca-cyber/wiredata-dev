@@ -115,13 +115,12 @@ export function SidePanelApp() {
   const [totalBytes, setTotalBytes] = useState<number>(0);
   const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
   const [allHistoryItems, setAllHistoryItems] = useState<DiscoveredItem[]>([]);
-  const [viewScope, setViewScope] = useState<'page' | 'domain' | 'all'>('domain');
+  const [viewMode, setViewMode] = useState<'session' | 'history'>('session');
   const [selectedDomainFilter, setSelectedDomainFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [copiedBadge, setCopiedBadge] = useState<string | null>(null);
   const [previewItem, setPreviewItem] = useState<DiscoveredItem | null>(null);
   const [previewTab, setPreviewTab] = useState<'table' | 'typescript' | 'schema' | 'json'>('table');
-  const [combinationFeedback, setCombinationFeedback] = useState<string | null>(null);
 
   // Workspace: defaults to shared browser-local IndexedDB storage
   const [workspaceManager, setWorkspaceManager] = useState<WorkspaceManager>(
@@ -742,47 +741,6 @@ export function SidePanelApp() {
     }
   };
 
-  const handleCombineMatchingDatasets = async (itemsToCombine: DiscoveredItem[]) => {
-    if (itemsToCombine.length < 2) return;
-    try {
-      const combinedRows: Record<string, any>[] = [];
-      const seenHashes = new Set<string>();
-      let primaryName = itemsToCombine[0].name.replace(/_combined$/, '');
-
-      for (const item of itemsToCombine) {
-        for (const r of item.rows) {
-          const serialized = JSON.stringify(r);
-          if (!seenHashes.has(serialized)) {
-            seenHashes.add(serialized);
-            combinedRows.push(r);
-          }
-        }
-      }
-
-      const combinedItemName = `${primaryName}_combined`;
-      const colKey = `combined:${currentTabDomain}:${combinedItemName}:/`;
-      const combinedItem: DiscoveredItem = {
-        id: colKey,
-        name: combinedItemName,
-        domain: currentTabDomain,
-        pageUrl: activeTab?.url || '',
-        route: 'combined/datasets',
-        pointer: '/',
-        rowCount: combinedRows.length,
-        capturesCount: itemsToCombine.reduce((acc, x) => acc + x.capturesCount, 0),
-        source: `Combined (${itemsToCombine.length} datasets)`,
-        rows: combinedRows,
-        captureRefs: itemsToCombine.flatMap(x => x.captureRefs),
-      };
-
-      setDiscoveredItems(prev => [combinedItem, ...prev.filter(x => x.id !== colKey)]);
-      setCombinationFeedback(`Combined ${itemsToCombine.length} datasets into ${combinedItemName} (${combinedRows.length} rows)!`);
-      setTimeout(() => setCombinationFeedback(null), 3500);
-    } catch (e: any) {
-      setCombinationFeedback(`Failed to combine: ${e.message}`);
-    }
-  };
-
   const isWorkbenchTab = !!activeTab?.url?.includes('workbench.html');
   const isRestrictedPage = !activeTab?.url || activeTab.url.startsWith('chrome');
   const hostName = activeTab?.url && !isRestrictedPage ? currentTabDomain : null;
@@ -929,13 +887,9 @@ export function SidePanelApp() {
         )}
       </div>
 
-      {/* Discovered Collections & Direct Actions (The Power Section) */}
+      {/* Discovered Datasets & Actions (Session-Centric Power Section) */}
       {(() => {
-        const rawPool = viewScope === 'page'
-          ? (discoveredItems.filter(x => !activeTab?.url || x.pageUrl === activeTab.url || x.route === activeTab.url))
-          : viewScope === 'domain'
-          ? (discoveredItems.filter(x => !currentTabDomain || x.domain === currentTabDomain))
-          : (allHistoryItems.length > 0 ? allHistoryItems : discoveredItems);
+        const rawPool = viewMode === 'session' ? discoveredItems : allHistoryItems;
 
         // Compute available domains for filter chips
         const uniqueDomains = Array.from(new Set(rawPool.map(x => x.domain).filter(Boolean)));
@@ -954,86 +908,80 @@ export function SidePanelApp() {
 
         return (
           <div style={{ marginBottom: 12 }}>
-            {/* Scope Bar */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: colors.textDim, letterSpacing: '0.04em' }}>
-                  📦 Datasets ({visibleItems.length})
-                </span>
-                {visibleItems.length > 0 && (
-                  <button
-                    onClick={handleClearAllItems}
-                    title="Clear current dataset items"
-                    style={{
-                      background: 'transparent',
-                      border: `1px solid ${colors.error}44`,
-                      color: colors.error,
-                      borderRadius: 4,
-                      padding: '1px 6px',
-                      fontSize: 10,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Clear All
-                  </button>
-                )}
-              </div>
-              <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 4, padding: 2 }}>
+            {/* Session vs History Tabs */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 6 }}>
+              <div style={{ display: 'flex', background: colors.panelBg, border: `1px solid ${colors.borderLight}`, borderRadius: 6, padding: 2 }}>
                 <button
-                  onClick={() => setViewScope('page')}
+                  onClick={() => { setViewMode('session'); setSelectedDomainFilter('ALL'); }}
                   style={{
-                    background: viewScope === 'page' ? colors.cardBg : 'transparent',
-                    color: viewScope === 'page' ? colors.primaryLight : colors.textDim,
+                    background: viewMode === 'session' ? colors.cardBg : 'transparent',
+                    color: viewMode === 'session' ? colors.primaryLight : colors.textDim,
                     border: 'none',
-                    borderRadius: 3,
-                    padding: '2px 6px',
-                    fontSize: 10,
+                    borderRadius: 4,
+                    padding: '4px 10px',
+                    fontSize: 11,
                     fontWeight: 700,
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
                   }}
                 >
-                  Page
-                </button>
-                <button
-                  onClick={() => setViewScope('domain')}
-                  style={{
-                    background: viewScope === 'domain' ? colors.cardBg : 'transparent',
-                    color: viewScope === 'domain' ? colors.primaryLight : colors.textDim,
-                    border: 'none',
-                    borderRadius: 3,
-                    padding: '2px 6px',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Domain
+                  <span>⏺ Current Session</span>
+                  <span style={{ fontSize: 10, background: viewMode === 'session' ? `${colors.primaryLight}22` : 'transparent', padding: '1px 5px', borderRadius: 4 }}>
+                    {discoveredItems.length}
+                  </span>
                 </button>
                 <button
                   onClick={async () => {
-                    setViewScope('all');
+                    setViewMode('history');
+                    setSelectedDomainFilter('ALL');
                     await loadAllHistory(workspaceManager);
                   }}
                   style={{
-                    background: viewScope === 'all' ? colors.cardBg : 'transparent',
-                    color: viewScope === 'all' ? colors.primaryLight : colors.textDim,
+                    background: viewMode === 'history' ? colors.cardBg : 'transparent',
+                    color: viewMode === 'history' ? colors.primaryLight : colors.textDim,
                     border: 'none',
-                    borderRadius: 3,
-                    padding: '2px 6px',
-                    fontSize: 10,
+                    borderRadius: 4,
+                    padding: '4px 10px',
+                    fontSize: 11,
                     fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
+                  <span>📁 Saved History</span>
+                  <span style={{ fontSize: 10, background: viewMode === 'history' ? `${colors.primaryLight}22` : 'transparent', padding: '1px 5px', borderRadius: 4 }}>
+                    {allHistoryItems.length}
+                  </span>
+                </button>
+              </div>
+
+              {visibleItems.length > 0 && (
+                <button
+                  onClick={handleClearAllItems}
+                  title="Clear dataset list"
+                  style={{
+                    background: 'transparent',
+                    border: `1px solid ${colors.error}44`,
+                    color: colors.error,
+                    borderRadius: 4,
+                    padding: '3px 7px',
+                    fontSize: 10,
+                    fontWeight: 600,
                     cursor: 'pointer',
                   }}
                 >
-                  All
+                  Clear All
                 </button>
-              </div>
+              )}
             </div>
 
-            {/* Domain Filter Pills */}
+            {/* Domain Filter Pills (Shown only when multiple domains exist) */}
             {uniqueDomains.length > 1 && (
-              <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 6, marginBottom: 6 }}>
+              <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 6, marginBottom: 8 }}>
                 <button
                   onClick={() => setSelectedDomainFilter('ALL')}
                   style={{
@@ -1048,7 +996,7 @@ export function SidePanelApp() {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  All Domains ({rawPool.length})
+                  All Sources ({rawPool.length})
                 </button>
                 {uniqueDomains.map(d => {
                   const count = rawPool.filter(x => x.domain === d).length;
@@ -1072,36 +1020,6 @@ export function SidePanelApp() {
                     </button>
                   );
                 })}
-              </div>
-            )}
-
-            {/* Smart Combiner Action Banner */}
-            {visibleItems.length >= 2 && (
-              <div style={{ background: `${colors.primaryLight}11`, border: `1px dashed ${colors.primaryLight}44`, borderRadius: 8, padding: 8, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: 11, color: colors.primaryLight }}>
-                  💡 <strong>{visibleItems.length} datasets</strong> detected in current view.
-                </div>
-                <button
-                  onClick={() => handleCombineMatchingDatasets(visibleItems)}
-                  style={{
-                    background: 'linear-gradient(135deg, #0284c7, #8b5cf6)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: 4,
-                    padding: '4px 10px',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  ⚡ Combine Datasets
-                </button>
-              </div>
-            )}
-
-            {combinationFeedback && (
-              <div style={{ fontSize: 11, background: '#10b98122', border: '1px solid #10b98144', color: '#10b981', borderRadius: 6, padding: '6px 8px', marginBottom: 8 }}>
-                {combinationFeedback}
               </div>
             )}
 
@@ -1130,8 +1048,16 @@ export function SidePanelApp() {
 
             {visibleItems.length === 0 ? (
               <div style={{ background: colors.panelBg, border: `1px dashed ${colors.borderLight}`, borderRadius: 8, padding: '16px 12px', textAlign: 'center', color: colors.textDim, fontSize: 11 }}>
-                <div>No datasets recorded for {viewScope === 'page' ? 'this page path' : viewScope === 'domain' ? `${currentTabDomain || 'this domain'}` : 'this workspace'}.</div>
-                <div style={{ marginTop: 4, fontSize: 10, color: colors.textDim }}>Click <strong>Start Capture</strong> or <strong>Scrape Table</strong> to record data.</div>
+                <div>
+                  {viewMode === 'session'
+                    ? 'No datasets captured in this session yet.'
+                    : 'No saved capture sessions found in workspace storage.'}
+                </div>
+                {viewMode === 'session' && (
+                  <div style={{ marginTop: 4, fontSize: 10, color: colors.textDim }}>
+                    Click <strong>⏺ Start Capture</strong> to record API calls or <strong>📑 Scrape Table</strong> to extract page data.
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
