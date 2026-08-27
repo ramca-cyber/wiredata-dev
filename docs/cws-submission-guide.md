@@ -1,7 +1,7 @@
 # Chrome Web Store Submission & Reviewer Package
 
-**Version:** 0.1.8  
-**Package Artifact:** `release/wiredata-extension-v0.1.8.zip`  
+**Version:** 0.1.9  
+**Package Artifact:** `release/wiredata-extension-v0.1.9.zip`  
 **Live Privacy Policy:** `https://ramca-cyber.github.io/wiredata-dev/privacy.html`  
 **Live Reviewer Test Page:** `https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html`
 
@@ -48,7 +48,7 @@ Copy and paste these exact explanations into the Chrome Web Store Developer Dash
 
 ### `activeTab`
 ```text
-Used solely to provide temporary, user-gesture-driven access to the single active browser tab where the user explicitly opens the Side Panel or clicks capture. WireData does not request persistent host permissions (<all_urls>) or run in the background on arbitrary websites.
+Used solely to provide temporary, user-gesture-driven access to the single active browser tab where the user explicitly opens the Side Panel or clicks capture. WireData does not request persistent host permissions on install or run in the background on arbitrary websites.
 ```
 
 ### `scripting`
@@ -66,9 +66,9 @@ Provides the companion user interface alongside the active browser tab, displayi
 Used only for chrome.storage.session to preserve ephemeral active-capture control state—active tab ID, session ID, origin, and capture status—across Manifest V3 service-worker suspension. Captured website content and datasets are not stored through this permission.
 ```
 
-### `host_permissions`
+### `optional_host_permissions` (`http://*/*`, `https://*/*`)
 ```text
-Required for chrome.scripting.executeScript to inject the client-side network interceptor and HTML table scraper on the user-selected active web tab when the user clicks 'Start Capture' or 'Scrape HTML Table' inside the side panel companion.
+Used on-demand only when the user clicks 'Start Capture' or 'Scrape HTML Table' inside the side panel companion to request permission for the single active web page origin. Zero host permissions are requested upon extension installation.
 ```
 
 ---

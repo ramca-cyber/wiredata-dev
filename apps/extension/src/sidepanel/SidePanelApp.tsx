@@ -406,6 +406,24 @@ export function SidePanelApp() {
         return;
       }
 
+      // Request on-demand host permission for the active tab's origin if needed
+      if (typeof chrome !== 'undefined' && chrome.permissions?.request && targetTab.url) {
+        try {
+          const parsed = new URL(targetTab.url);
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            const originPattern = `${parsed.origin}/*`;
+            const hasPermission = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
+            if (!hasPermission) {
+              const granted = await chrome.permissions.request({ origins: [originPattern] }).catch(() => false);
+              if (!granted) {
+                setStartError(`Host permission for ${parsed.hostname} was not granted.`);
+                return;
+              }
+            }
+          }
+        } catch {}
+      }
+
       let hostNameClean = 'Active Web Tab';
       try { if (targetTab.url) hostNameClean = new URL(targetTab.url).hostname; } catch {}
 
@@ -466,6 +484,24 @@ export function SidePanelApp() {
       if (targetTab.url?.startsWith('chrome')) {
         setScrapeStatus({ message: 'Cannot scrape internal browser pages.', tone: 'error' });
         return;
+      }
+
+      // Request on-demand host permission for the active tab's origin if needed
+      if (typeof chrome !== 'undefined' && chrome.permissions?.request && targetTab.url) {
+        try {
+          const parsed = new URL(targetTab.url);
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            const originPattern = `${parsed.origin}/*`;
+            const hasPermission = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
+            if (!hasPermission) {
+              const granted = await chrome.permissions.request({ origins: [originPattern] }).catch(() => false);
+              if (!granted) {
+                setScrapeStatus({ message: `Host permission for ${parsed.hostname} was not granted.`, tone: 'error' });
+                return;
+              }
+            }
+          }
+        } catch {}
       }
 
       let session = activeSession;

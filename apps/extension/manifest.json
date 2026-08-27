@@ -32,7 +32,7 @@
     "sidePanel",
     "storage"
   ],
-  "host_permissions": [
+  "optional_host_permissions": [
     "http://*/*",
     "https://*/*"
   ],
