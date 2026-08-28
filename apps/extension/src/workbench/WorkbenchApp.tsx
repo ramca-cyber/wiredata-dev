@@ -990,6 +990,33 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
           >
             📁 {workspaceName}
           </button>
+          <div
+            data-testid="duckdb-status"
+            data-state={duckdbStatus.ready ? 'active' : duckdbStatus.error ? 'error' : 'initializing'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: duckdbStatus.ready ? '#10b98118' : duckdbStatus.error ? '#ef444418' : `${colors.warning}18`,
+              border: `1px solid ${duckdbStatus.ready ? '#10b98144' : duckdbStatus.error ? '#ef444444' : `${colors.warning}44`}`,
+              borderRadius: 12,
+              padding: '4px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              color: duckdbStatus.ready ? '#10b981' : duckdbStatus.error ? '#ef4444' : colors.warning,
+            }}
+            title={duckdbStatus.error || (duckdbStatus.ready ? 'DuckDB WebAssembly SQL Engine Active' : 'Initializing DuckDB Engine...')}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: duckdbStatus.ready ? '#10b981' : duckdbStatus.error ? '#ef4444' : colors.warning,
+              }}
+            />
+            <span>{duckdbStatus.ready ? 'DuckDB Active' : duckdbStatus.error ? 'DuckDB Error' : 'DuckDB Starting...'}</span>
+          </div>
           {hostMode === 'devtools' && (
             <button
               onClick={toggleCapture}

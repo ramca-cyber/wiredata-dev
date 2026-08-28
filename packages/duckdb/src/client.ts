@@ -217,6 +217,9 @@ export class DuckDBClient {
   ): Promise<void> {
     return this.enqueue(async () => {
       if (!this.conn || !this.db) {
+        await this.init();
+      }
+      if (!this.conn || !this.db) {
         throw new Error('DuckDB engine is not available — cannot register dataset.');
       }
 
@@ -280,6 +283,9 @@ export class DuckDBClient {
    */
   async suggestParseRules(columnValues: Record<string, string[]>): Promise<ParseRuleSuggestion[]> {
     return this.enqueue(async () => {
+      if (!this.conn || !this.db) {
+        await this.init();
+      }
       if (!this.conn || !this.db) {
         throw new Error('DuckDB engine is not available — cannot suggest parse rules.');
       }
@@ -355,6 +361,9 @@ export class DuckDBClient {
 
   async query(sql: string): Promise<QueryResult> {
     return this.enqueue(async () => {
+      if (!this.conn) {
+        await this.init();
+      }
       if (!this.conn) {
         throw new Error(
           this.initError ? `SQL engine unavailable: ${this.initError}` : 'SQL engine is not ready yet.'
