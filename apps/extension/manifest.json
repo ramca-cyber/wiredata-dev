@@ -30,9 +30,10 @@
     "activeTab",
     "scripting",
     "sidePanel",
-    "storage"
+    "storage",
+    "tabs"
   ],
-  "optional_host_permissions": [
+  "host_permissions": [
     "http://*/*",
     "https://*/*"
   ],

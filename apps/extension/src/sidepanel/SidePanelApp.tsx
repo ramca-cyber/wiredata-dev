@@ -164,15 +164,26 @@ export function SidePanelApp() {
   const syncActiveTab = async () => {
     if (typeof chrome === 'undefined' || !chrome.tabs?.query) return;
     try {
+      // 1. Try querying active tab in last focused window
       let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (!tabs[0] || !tabs[0].url || tabs[0].url.startsWith('chrome-extension://')) {
-        tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      let candidate = tabs.find(t => t.id && t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'));
+
+      // 2. If not found or focused on sidepanel, query active tabs across all windows
+      if (!candidate) {
+        tabs = await chrome.tabs.query({ active: true });
+        candidate = tabs.find(t => t.id && t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'));
       }
-      if (tabs[0]?.id) {
+
+      // 3. Fallback to any active tab
+      if (!candidate && tabs[0]?.id) {
+        candidate = tabs[0];
+      }
+
+      if (candidate?.id) {
         const foundTab = {
-          id: tabs[0].id,
-          url: tabs[0].url || tabs[0].pendingUrl || '',
-          title: tabs[0].title || '',
+          id: candidate.id,
+          url: candidate.url || candidate.pendingUrl || '',
+          title: candidate.title || '',
         };
         setActiveTab(foundTab);
         checkDomainPermission(foundTab.url);
