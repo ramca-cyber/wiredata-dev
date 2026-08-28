@@ -26,7 +26,7 @@ describe('Workspace Storage & Serialization', () => {
     const metadata = await manager.getMetadata();
     expect(metadata).not.toBeNull();
     expect(metadata?.format_version).toBe(1);
-    expect(metadata?.application_version).toBe('0.1.9');
+    expect(metadata?.application_version).toBe('0.2.0');
   });
 
   it('saves and lists capture sessions', async () => {

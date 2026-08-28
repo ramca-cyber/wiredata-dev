@@ -1,6 +1,6 @@
 {
   "name": "wiredata-dev",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Network Data Workbench - Turn structured JSON application traffic into queryable, traceable local datasets",
@@ -9,16 +9,16 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm --workspace=apps/extension run dev",
-    "fixture": "npm --workspace=apps/fixture-app run dev",
+    "dev": "npm run dev --workspace=@wiredata/extension",
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "vitest run --project=integration",
+    "test:e2e": "vitest run packages/core/tests/e2e.test.ts",
     "typecheck": "tsc -b",
     "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
     "check": "npm run typecheck && npm test && npm run build",
-    "package": "npm run check && powershell -Command \"New-Item -ItemType Directory -Force -Path release; Compress-Archive -Path apps/extension/dist/* -DestinationPath release/wiredata-extension-v0.1.9.zip -Force\" && node scripts/validate-release.js && node scripts/chrome-smoke-test.js"
+    "package": "npm run check && powershell -Command \"New-Item -ItemType Directory -Force -Path release; Compress-Archive -Path apps/extension/dist/* -DestinationPath release/wiredata-extension-v0.2.0.zip -Force\" && node scripts/validate-release.js && node scripts/chrome-smoke-test.js"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

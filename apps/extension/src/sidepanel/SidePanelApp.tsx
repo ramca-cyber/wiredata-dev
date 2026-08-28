@@ -99,7 +99,7 @@ function generateTypesFromRows(name: string, rows: Record<string, any>[]): { tsI
 }
 
 export function SidePanelApp() {
-  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.9';
+  const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.2.0';
   const [activeTab, setActiveTab] = useState<{ id?: number; url?: string; title?: string } | null>(null);
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const isCapturingRef = useRef<boolean>(false);
