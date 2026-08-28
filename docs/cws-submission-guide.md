@@ -71,9 +71,9 @@ Used only for chrome.storage.session to preserve ephemeral active-capture contro
 Used to detect the URL and hostname of the active browser tab when the side panel companion is opened, enabling domain-aware dataset grouping and provenance attribution.
 ```
 
-### `host_permissions` (`http://*/*`, `https://*/*`)
+### `optional_host_permissions` (`http://*/*`, `https://*/*`)
 ```text
-Required to inject the in-memory JSON network capture hook and DOM table extractor into user-selected web pages when the user explicitly clicks 'Start Capture' or 'Scrape Table' in the companion panel. All captured data is processed strictly locally on the user's machine.
+Used on-demand only when the user explicitly clicks 'Start Capture' or 'Scrape Table' inside the side panel companion to request permission for the single active web page origin. Zero host permissions are requested upon initial extension installation.
 ```
 
 ---

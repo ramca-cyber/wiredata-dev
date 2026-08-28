@@ -486,6 +486,9 @@ export function SidePanelApp() {
                 setStartError(`Host permission for ${parsed.hostname} was not granted.`);
                 return;
               }
+              setDomainPermissionGranted(true);
+            } else {
+              setDomainPermissionGranted(true);
             }
           }
         } catch {}
@@ -566,6 +569,9 @@ export function SidePanelApp() {
                 setScrapeStatus({ message: `Host permission for ${parsed.hostname} was not granted.`, tone: 'error' });
                 return;
               }
+              setDomainPermissionGranted(true);
+            } else {
+              setDomainPermissionGranted(true);
             }
           }
         } catch {}
