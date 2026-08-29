@@ -85,6 +85,8 @@ const chromeArgs = [
   '--no-sandbox',
   '--disable-gpu',
   '--headless=new',
+  '--no-proxy-server',
+  '--proxy-bypass-list=*',
   '--remote-debugging-port=9223',
   'about:blank',
 ];
@@ -150,7 +152,7 @@ async function captureScreenshots() {
     throw new Error('Chrome CDP did not become responsive on port 9223.');
   }
 
-  const baseUrl = 'http://localhost:8081';
+  const baseUrl = 'http://127.0.0.1:9988';
   console.log(`  ✓ Using local server at: ${baseUrl}`);
 
   // -------------------------------------------------------------
@@ -197,35 +199,15 @@ async function captureScreenshots() {
   // -------------------------------------------------------------
   // SCREENSHOT 3: DuckDB Analytical SQL Runner with Results (1440 x 900)
   // -------------------------------------------------------------
-  console.log('⚡ Capturing Screenshot 3: DuckDB SQL Query Results...');
+  console.log('⚡ Capturing Screenshot 3: DuckDB SQL Query Results on GitHub Pull Requests...');
   await wbSend('Runtime.evaluate', {
     expression: `
       (async () => {
-        // 1. Click Candidates tab
-        const candBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Candidates'));
-        if (candBtn) {
-          candBtn.click();
-          await new Promise(r => setTimeout(r, 800));
-          // Click Extract Combined Dataset
-          const extractBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Extract Combined'));
-          if (extractBtn) {
-            extractBtn.click();
-            await new Promise(r => setTimeout(r, 1000));
-          }
-        }
-
-        // 2. Click SQL Workspace tab
+        // Click SQL Workspace tab
         const sqlTab = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('SQL Workspace'));
         if (sqlTab) {
           sqlTab.click();
-          await new Promise(r => setTimeout(r, 1000));
-          
-          // Set an interesting SQL query in textarea
-          const ta = document.querySelector('textarea');
-          if (ta) {
-            ta.value = "SELECT status, count(*) AS total_orders, round(avg(total_amount), 2) AS avg_amount, round(sum(total_amount), 2) AS gross_sales\\nFROM orders\\nGROUP BY status\\nORDER BY gross_sales DESC;";
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
-          }
+          await new Promise(r => setTimeout(r, 800));
 
           // Click Run SQL
           const runBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Run SQL'));
@@ -236,7 +218,7 @@ async function captureScreenshots() {
       })();
     `
   });
-  await new Promise(r => setTimeout(r, 3000));
+  await new Promise(r => setTimeout(r, 2500));
 
   const wbShot2 = await wbSend('Page.captureScreenshot', { format: 'png' });
   const wbFile2 = path.join(outDir, '03-wiredata-duckdb-sql.png');
@@ -250,14 +232,11 @@ async function captureScreenshots() {
   await wbSend('Runtime.evaluate', {
     expression: `
       (async () => {
-        // Find sidebar dataset button
-        const allElements = Array.from(document.querySelectorAll('*'));
-        const orderBtn = allElements.find(el => el.textContent === 'orders' && el.parentElement?.textContent?.includes('300'));
-        if (orderBtn) {
-          orderBtn.click();
-        } else {
-          const dsBtn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent && el.textContent.includes('orders') && el.textContent.includes('300'));
-          if (dsBtn) dsBtn.click();
+        // Find sidebar dataset button in aside for pull_requests
+        const buttons = Array.from(document.querySelectorAll('aside button'));
+        const prBtn = buttons.find(b => b.textContent && b.textContent.includes('pull_requests'));
+        if (prBtn) {
+          prBtn.click();
         }
       })();
     `
@@ -297,11 +276,11 @@ async function captureScreenshots() {
           await new Promise(r => setTimeout(r, 100));
         }
 
-        // Simulate click on start capture or render cards
+        // Click Saved History tab
         const buttons = Array.from(document.querySelectorAll('button'));
-        const startBtn = buttons.find(b => b.textContent && b.textContent.includes('Start Capture'));
-        if (startBtn) {
-          startBtn.click();
+        const histBtn = buttons.find(b => b.textContent && b.textContent.includes('Saved History'));
+        if (histBtn) {
+          histBtn.click();
         }
       })();
     `

@@ -113,45 +113,71 @@ function generateCurlCommand(capture: CapturedRequest): string {
   return `curl -X ${method} '${url}' \\\n  -H 'Accept: application/json'`;
 }
 
-function generateOrdersMock(page: number, pageSize: number = 100) {
+function generateGitHubPullsMock(page: number, pageSize: number = 100) {
   const startId = (page - 1) * pageSize + 1;
-  const orders = [];
-  const statuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
-  const cities = ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa'];
+  const pulls = [];
+  const authors = ['gaearon', 'acdlite', 'sophiebits', 'sebmarkbage', 'brianvaughn', 'rickhanlonii', 'eps1lon'];
+  const states = ['open', 'closed', 'merged'];
+  const titles = [
+    'Fix(compiler): optimize reactive scope memoization across fast-refresh boundaries',
+    'Feat(server-actions): support streaming multipart form data payloads',
+    'Refactor(reconciler): streamline fiber priority queue dispatch scheduling',
+    'Fix(hooks): preserve useSyncExternalStore subscription order during hydration',
+    'Docs(getting-started): clarify server components vs client boundaries',
+    'Feat(devtools): add memory footprint breakdown by fiber subtree',
+    'Test(transitions): verify startTransition suspense boundary fallback consistency',
+  ];
 
-  for (let i = 0; i < pageSize; i++) {
+  for (const i of Array.from({ length: pageSize }, (_, x) => x)) {
     const id = startId + i;
-    const customerId = (id % 50) + 1;
-    const status = statuses[id % statuses.length];
-    const total = Math.round((20 + (id * 13.37) % 500) * 100) / 100;
-    const city = cities[id % cities.length];
+    const author = authors[id % authors.length];
+    const state = states[id % states.length];
+    const title = titles[id % titles.length];
+    const comments = (id * 3) % 29;
 
-    orders.push({
+    pulls.push({
       id,
-      customer_id: customerId,
-      status,
-      total,
-      created_at: `2026-08-${String((id % 28) + 1).padStart(2, '0')}T10:00:00Z`,
-      customer: {
-        id: customerId,
-        name: `Customer ${customerId}`,
-        address: {
-          city,
-          country: 'Canada',
-        },
+      number: 28000 + id,
+      title: `${title} (#${28000 + id})`,
+      state,
+      comments,
+      user: {
+        id: 5000 + (id % 50),
+        login: author,
+        type: 'User',
       },
+      created_at: `2026-08-${String((id % 28) + 1).padStart(2, '0')}T14:20:00Z`,
+      updated_at: `2026-08-${String((id % 28) + 1).padStart(2, '0')}T18:30:00Z`,
+      html_url: `https://github.com/facebook/react/pull/${28000 + id}`,
     });
   }
 
   return {
-    total: 8247,
+    pull_requests: pulls,
+    total_count: 8247,
     page,
     pageSize,
     hasMore: page < 83,
-    data: {
-      orders,
-    },
   };
+}
+
+function generateCoinGeckoMock() {
+  return [
+    { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', current_price: 64820.50, market_cap: 1276000000000, total_volume: 28400000000, price_change_24h: 2.45 },
+    { id: 'ethereum', symbol: 'eth', name: 'Ethereum', current_price: 3480.20, market_cap: 418000000000, total_volume: 14200000000, price_change_24h: -0.85 },
+    { id: 'solana', symbol: 'sol', name: 'Solana', current_price: 154.60, market_cap: 72000000000, total_volume: 4100000000, price_change_24h: 5.12 },
+    { id: 'cardano', symbol: 'ada', name: 'Cardano', current_price: 0.38, market_cap: 13600000000, total_volume: 380000000, price_change_24h: 1.20 },
+    { id: 'avalanche-2', symbol: 'avax', name: 'Avalanche', current_price: 26.40, market_cap: 10400000000, total_volume: 450000000, price_change_24h: -1.40 },
+  ];
+}
+
+function generateHackerNewsMock() {
+  return [
+    { id: 41389201, title: 'DuckDB 1.1.0 Released with In-Browser WebAssembly Parquet Streaming', by: 'dang', score: 482, comments_count: 164, url: 'https://duckdb.org/2026/08/duckdb-wasm' },
+    { id: 41388450, title: 'Show HN: WireData – Client-side analytical SQL workbench for Chrome', by: 'ramwise', score: 395, comments_count: 98, url: 'https://wiredata.dev' },
+    { id: 41387120, title: 'SQLite 3.46 Query Planner Optimizations', by: 'drh', score: 280, comments_count: 73, url: 'https://sqlite.org/draft/releaselog/3_46_0.html' },
+    { id: 41386500, title: 'Local-First Software: You Own Your Data, in spite of the Cloud', by: 'inkandswitch', score: 512, comments_count: 220, url: 'https://www.inkandswitch.com/local-first/' },
+  ];
 }
 
 export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
@@ -205,7 +231,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const [suggestError, setSuggestError] = useState<string | null>(null);
 
   // SQL Runner state
-  const [sqlQuery, setSqlQuery] = useState<string>('SELECT * FROM orders LIMIT 20;');
+  const [sqlQuery, setSqlQuery] = useState<string>(
+    'SELECT user__login AS author, count(*) AS total_prs, round(avg(comments), 1) AS avg_comments, max(created_at) AS latest_activity FROM pull_requests GROUP BY user__login ORDER BY total_prs DESC LIMIT 10;'
+  );
   const [sqlResult, setSqlResult] = useState<{ columns: string[]; rows: any[]; durationMs: number } | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
 
@@ -486,42 +514,31 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     if (!activeSession) return;
 
     const urls = [
-      { url: 'http://localhost:5173/api/orders?page=1', method: 'GET' },
-      { url: 'http://localhost:5173/api/orders?page=2', method: 'GET' },
-      { url: 'http://localhost:5173/api/orders?page=3', method: 'GET' },
-      { url: 'http://localhost:5173/api/orders/9182/items', method: 'GET' },
-      { url: 'http://localhost:5173/api/customers/44', method: 'GET' },
-      { url: 'http://localhost:5173/api/duplicates', method: 'GET' },
-      { url: 'http://localhost:5173/api/mixed-types', method: 'GET' },
+      { url: 'https://api.github.com/repos/facebook/react/pulls?page=1&per_page=100', method: 'GET' },
+      { url: 'https://api.github.com/repos/facebook/react/pulls?page=2&per_page=100', method: 'GET' },
+      { url: 'https://api.github.com/repos/facebook/react/pulls?page=3&per_page=100', method: 'GET' },
+      { url: 'https://api.github.com/repos/facebook/react/pulls/28941/comments', method: 'GET' },
+      { url: 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc', method: 'GET' },
+      { url: 'https://hacker-news.firebaseio.com/v0/topstories.json', method: 'GET' },
+      { url: 'https://store.github.com/products.json?limit=50', method: 'GET' },
       {
-        url: 'http://localhost:5173/graphql',
+        url: 'https://api.github.com/graphql',
         method: 'POST',
-        body: JSON.stringify({ operationName: 'OrdersQuery', query: 'query OrdersQuery { orders { id status total } }' }),
+        body: JSON.stringify({ operationName: 'RepositoryStats', query: 'query RepositoryStats { repository(owner:"facebook", name:"react") { stargazers { totalCount } } }' }),
       },
     ];
 
     for (const item of urls) {
       try {
         let rawJson: any = null;
-        try {
-          const res = await fetch(item.url, {
-            method: item.method,
-            headers: { 'Content-Type': 'application/json' },
-            body: item.body,
-          });
-          if (res.ok) rawJson = await res.json();
-        } catch {}
-
-        if (!rawJson) {
-          if (item.url.includes('/api/orders?page=1')) rawJson = generateOrdersMock(1, 100);
-          else if (item.url.includes('/api/orders?page=2')) rawJson = generateOrdersMock(2, 100);
-          else if (item.url.includes('/api/orders?page=3')) rawJson = generateOrdersMock(3, 100);
-          else if (item.url.includes('/api/orders/9182/items')) rawJson = { order_id: 9182, items: [{ item_id: 91821, sku: 'SKU-A101', quantity: 2, unit_price: 24.99 }] };
-          else if (item.url.includes('/api/customers/44')) rawJson = { id: 44, name: 'Customer 44', email: 'user44@example.com', tier: 'platinum' };
-          else if (item.url.includes('/api/duplicates')) rawJson = { items: [{ id: 1, status: 'v1_initial' }, { id: 1, status: 'v1_updated' }, { id: 2, status: 'v1_single' }] };
-          else if (item.url.includes('/api/mixed-types')) rawJson = { records: [{ id: 1, amount: 45.5 }, { id: 2, amount: 99.0 }, { id: 3, amount: 'unknown' }] };
-          else if (item.url.includes('/graphql')) rawJson = { data: { orders: [{ id: 9182, status: 'shipped', total: 84.12745 }, { id: 9183, status: 'pending', total: 42.11 }] } };
-        }
+        if (item.url.includes('/repos/facebook/react/pulls?page=1')) rawJson = generateGitHubPullsMock(1, 100);
+        else if (item.url.includes('/repos/facebook/react/pulls?page=2')) rawJson = generateGitHubPullsMock(2, 100);
+        else if (item.url.includes('/repos/facebook/react/pulls?page=3')) rawJson = generateGitHubPullsMock(3, 100);
+        else if (item.url.includes('/comments')) rawJson = [{ id: 1092, body: 'LGTM! Great optimization for reactive memoization.', user: { login: 'gaearon' } }];
+        else if (item.url.includes('coingecko.com')) rawJson = generateCoinGeckoMock();
+        else if (item.url.includes('hacker-news.firebaseio.com')) rawJson = generateHackerNewsMock();
+        else if (item.url.includes('store.github.com')) rawJson = { products: [{ id: 7891, title: 'GitHub Invertocat Mug', vendor: 'GitHub', price: 24.00 }] };
+        else if (item.url.includes('/graphql')) rawJson = { data: { repository: { stargazers: { totalCount: 228490 } } } };
 
         if (!rawJson) continue;
 
@@ -566,8 +583,8 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         const candidates = detectCandidateCollections(rawJson);
         ingestCapturedData(capture, rawJson, candidates);
 
-        if (item.url.includes('/api/orders?page=1') && candidates.length > 0) {
-          const cand = candidates.find(c => c.pointer === '/data/orders') || candidates[0];
+        if (item.url.includes('/repos/facebook/react/pulls?page=1') && candidates.length > 0) {
+          const cand = candidates.find(c => c.pointer === '/pull_requests') || candidates[0];
           const dsId = `ds_${cand.suggested_name}`;
           const def: DatasetDefinition = {
             id: dsId,
@@ -575,7 +592,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
             version: 1,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
-            sources: [{ method: 'GET', route_pattern: '/api/orders' }],
+            sources: [{ method: 'GET', route_pattern: normalizedRoute }],
             extraction: {
               record_pointer: cand.pointer,
               nested_object_policy: 'flatten',

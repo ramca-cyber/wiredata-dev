@@ -28,23 +28,23 @@ Modern web applications exchange gigabytes of structured, rich JSON data every s
 WireData lives directly alongside your web application in Chrome's native Side Panel.
 
 ![WireData Side Panel Companion](assets/01-wiredata-sidepanel.png)
-*Figure 1: The Side Panel companion automatically pins to the active web tab, tracks captured JSON fetch/XHR traffic, discovers array collections (`orders`, `items`), and generates TypeScript interfaces in one click.*
+*Figure 1: The Side Panel companion pinned to GitHub (`facebook/react`), automatically discovering repeating collections across `api.github.com` (`pull_requests`) and `api.coingecko.com` (`crypto_markets`) with 1-click TypeScript interface and CSV export.*
 
 - **On-Demand Permission Model**: Zero host permissions on install. When you click **Start Capture**, Chrome triggers a native one-click domain permission request (`optional_host_permissions`) preserving user gesture activation.
-- **Candidate Collection Detection**: Automatically inspects nested JSON responses to find repeating record collections (e.g., `/data/orders`, `/items`), tracking capture counts and aggregate row counts in real time.
-- **Instant Developer Exports**: 1-click copy for TypeScript interfaces (`interface OrderItem { ... }`), JSON Schemas, NDJSON/JSONL, and spreadsheet-safe CSV.
+- **Candidate Collection Detection**: Automatically inspects nested JSON responses to find repeating record collections (e.g., `pull_requests`, `crypto_markets`), tracking capture counts and aggregate row counts in real time.
+- **Instant Developer Exports**: 1-click copy for TypeScript interfaces (`interface PullRequest { ... }`), JSON Schemas, NDJSON/JSONL, and spreadsheet-safe CSV.
 
 ---
 
-### 2. Full SQL Data Workbench: Candidate Aggregation & Lineage
+### 2. Full SQL Data Workbench: Real-World Public API Inspection
 
 Clicking **Workbench ↗** opens the full-screen analytical studio.
 
 ![WireData Workbench Captures View](assets/02-wiredata-workbench-captures.png)
-*Figure 2: The Workbench captures view displays captured endpoints, normalized route templates, HTTP methods, status codes, timing metrics, and candidate collections.*
+*Figure 2: The Workbench captures view displaying real-world public web traffic across GitHub REST & GraphQL endpoints, CoinGecko Markets, and Hacker News Firebase APIs with byte sizes, status codes, and normalized route templates.*
 
-- **Route Normalization**: Intelligent parameter masking converts endpoints like `/api/orders/9182/items` into route templates (`/api/orders/{id}/items`) and attributes GraphQL operations from URL search params.
-- **Multi-Route Combined Datasets**: Aggregate 10+ paginated API requests into a single unified dataset with configurable deduplication policies (`keep_latest`, `keep_all`, `keep_first`).
+- **Route Normalization**: Intelligent parameter masking converts endpoints like `https://api.github.com/repos/facebook/react/pulls?page=1&per_page=100` into canonical route templates and attributes GraphQL operations from payload inspection.
+- **Multi-Route Combined Datasets**: Aggregate paginated API requests into a single unified dataset with configurable deduplication policies (`keep_latest`, `keep_all`, `keep_first`).
 
 ---
 
@@ -53,18 +53,19 @@ Clicking **Workbench ↗** opens the full-screen analytical studio.
 The centerpiece of WireData is an embedded analytical SQL engine running completely client-side in a WebAssembly worker.
 
 ![DuckDB-WASM SQL Runner](assets/03-wiredata-duckdb-sql.png)
-*Figure 3: Querying combined live application data with DuckDB analytical SQL in milliseconds directly in Chrome.*
+*Figure 3: Querying 300+ captured GitHub pull requests using DuckDB analytical SQL in milliseconds directly in Chrome.*
 
 ```sql
--- Analyze order distributions directly from live captured JSON traffic
+-- Analyze PR velocity and reviewer engagement by author on facebook/react
 SELECT 
-    status,
-    count(*) AS total_orders,
-    round(avg(total_amount), 2) AS avg_order_value,
-    round(sum(total_amount), 2) AS gross_revenue
-FROM orders
-GROUP BY status
-ORDER BY gross_revenue DESC;
+    user__login AS author,
+    count(*) AS total_prs,
+    round(avg(comments), 1) AS avg_comments,
+    max(created_at) AS latest_activity
+FROM pull_requests
+GROUP BY user__login
+ORDER BY total_prs DESC 
+LIMIT 10;
 ```
 
 - **Blazing Fast Analytics**: Powered by DuckDB's vectorized columnar engine compiled to WebAssembly (`duckdb-mvp.wasm`).
@@ -75,7 +76,7 @@ ORDER BY gross_revenue DESC;
 ### 4. Datasets Explorer & Lineage Tracking
 
 ![Datasets Explorer Table](assets/04-wiredata-datasets-explorer.png)
-*Figure 4: Datasets Explorer showing schema definitions, active row records, provenance lineage metadata, and formula-safe export tools.*
+*Figure 4: Datasets Explorer showing the extracted `ds_pull_requests` dataset (300 observed rows across 11 columns) with full type badges (`BIGINT`, `TIMESTAMP`, `VARCHAR`), TypeScript interface modal, and Parquet/CSV export tools.*
 
 ---
 
