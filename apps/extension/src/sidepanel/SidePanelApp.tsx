@@ -482,14 +482,13 @@ export function SidePanelApp() {
       }
 
       // P0-2: permissions.request() must be the first async call after the user gesture
-      // to preserve the user-activation context. We use the pre-computed
-      // domainPermissionGranted state (set by checkDomainPermission when the tab syncs)
-      // and skip the async contains() check entirely inside the click handler.
+      // to preserve the user-activation context. If permission is not yet known (null)
+      // or ungranted (false), request it immediately during the click event.
       if (typeof chrome !== 'undefined' && chrome.permissions?.request && targetTab.url) {
         try {
           const parsed = new URL(targetTab.url);
           if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            if (domainPermissionGranted === false) {
+            if (domainPermissionGranted !== true) {
               const originPattern = `${parsed.origin}/*`;
               const granted = await chrome.permissions.request({ origins: [originPattern] }).catch(() => false);
               if (!granted) {
@@ -569,7 +568,7 @@ export function SidePanelApp() {
         try {
           const parsed = new URL(targetTab.url);
           if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            if (domainPermissionGranted === false) {
+            if (domainPermissionGranted !== true) {
               const originPattern = `${parsed.origin}/*`;
               const granted = await chrome.permissions.request({ origins: [originPattern] }).catch(() => false);
               if (!granted) {

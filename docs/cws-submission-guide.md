@@ -84,13 +84,17 @@ Even though all processing is 100% client-side and never leaves the device, Chro
 
 ### A. Data Usage Category Declarations
 
-| Data Category | Declared? | Justification / Description |
+> [!TIP]
+> **Dashboard Alignment Guidance:** Chrome Web Store defines data handling broadly to include response content processed locally on device. Because WireData allows developers to capture arbitrary JSON API responses from websites they inspect, those response payloads may legitimately contain fields related to authentication, billing/financial data, personal communications, or location returned by the target API.
+> 
+> When completing the Privacy Practices form in the Developer Dashboard, declare **Website Content** and **Web Browsing Activity** as primary categories. If the form prompts specifically for subcategories present in intercepted response traffic, disclose them with the justification that all captured data is processed and stored 100% locally on the user's device for developer inspection and is never transmitted off-device.
+
+| Data Category | Suggested Dashboard Declaration | Justification / Description |
 | :--- | :---: | :--- |
-| **Website Content** | **YES** | Intercepted JSON fetch/XHR API responses and extracted DOM table cell text are processed and stored strictly on the user's local device to enable developer inspection, schema inference, and SQL analysis. No data is transmitted to external servers. Captured response bodies may contain data returned by the inspected website. |
+| **Website Content** | **YES** | Intercepted JSON fetch/XHR API responses and extracted DOM table cell text are processed and stored strictly on the user's local device to enable developer inspection, schema inference, and SQL analysis. No data is transmitted to external servers. Captured response payloads may contain arbitrary data returned by the inspected service. |
 | **Web Browsing Activity** | **YES** | Request endpoint URLs and target page URLs are recorded locally to provide provenance tracking and route grouping. Query parameters containing sensitive credentials (tokens, keys, secrets) and URL hash fragments are automatically sanitized before local storage. |
-| **Authentication Information** | **NO** | Authorization headers, Cookies, and session tokens are never collected or stored. Request bodies are not stored or transmitted; for GraphQL only, the operationName is transiently read in memory to label datasets and immediately discarded. |
-| **Personal Communications** | **NO** | Not targeted or collected as a category. |
-| **Location / Financial** | **NO** | Not targeted or collected as a category. |
+| **Authentication Information** | Check CWS Dashboard prompt | Request headers (`Authorization`, `Cookie`), credentials, and request bodies are not stored or transmitted. Captured JSON API responses may contain response tokens returned by web endpoints; all processing and storage remain strictly local on the device. |
+| **Personal Communications / Financial / Location** | Check CWS Dashboard prompt | Not targeted by the extension. Any arbitrary fields contained within captured API responses remain strictly on the user's device and under user control. |
 
 ### B. Remote Code Declaration
 ```text
