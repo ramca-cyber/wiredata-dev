@@ -14,10 +14,17 @@ import {
   ULID,
 } from '@wiredata/core';
 
+/**
+ * canonicalRawText is the exact bytes received from the network — the string
+ * that was SHA-256 hashed to produce capture.response.body_hash. Callers must
+ * persist *this string* (not a re-serialized form of parsedBody) so that the
+ * hash key and the stored bytes remain identical.
+ */
 export type OnPageCaptureCallback = (
   capture: CapturedRequest,
-  rawBody: unknown,
-  candidates: CandidateCollection[]
+  parsedBody: unknown,
+  candidates: CandidateCollection[],
+  canonicalRawText?: string
 ) => void;
 
 export class PageNetworkCaptureAdapter {
@@ -169,7 +176,10 @@ export class PageNetworkCaptureAdapter {
       },
     };
 
-    const candidates = p.body ? detectCandidateCollections(p.body) : [];
-    this.onCapture(capture, p.body, candidates);
+    const parsedBody = p.body;
+    const candidates = parsedBody ? detectCandidateCollections(parsedBody) : [];
+    // Pass rawText as the 4th arg so the persistence layer stores the exact
+    // canonical bytes that were hashed — not a re-serialized form of parsedBody.
+    this.onCapture(capture, parsedBody, candidates, rawText);
   }
 }

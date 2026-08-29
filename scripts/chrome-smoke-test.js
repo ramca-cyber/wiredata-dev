@@ -78,9 +78,14 @@ function findChrome() {
 
 const chromeBin = findChrome();
 if (!chromeBin) {
-  console.warn(`⚠️ Chrome executable not detected on standard paths. Skipping live browser invocation.`);
-  console.log(`✅ Static ZIP unpacked verification completed successfully.`);
-  process.exit(0);
+  if (process.env.ALLOW_NO_CHROME === '1') {
+    console.warn(`⚠️  Chrome not found. ALLOW_NO_CHROME=1 set — skipping live browser test.`);
+    console.log(`✅ Static ZIP structure verified (browser smoke skipped).`);
+    process.exit(0);
+  }
+  console.error(`❌ Chrome executable not found on standard paths.`);
+  console.error(`   Set ALLOW_NO_CHROME=1 to explicitly skip the live browser smoke test.`);
+  process.exit(1);
 }
 
 console.log(`🌐 Using Chrome binary: ${chromeBin}`);
@@ -330,22 +335,36 @@ async function runSmokeTest() {
     }
   }
 
-  if (workingExtensionId && wbState) {
-    console.log(`  ✓ workbench.html rendered cleanly (Title: "${wbState.title}", DuckDB State: "${wbState.duckdbState}")`);
-
-    // 4. Test Side Panel Page
-    console.log(`\n📱 Testing Side Panel Page (chrome-extension://${workingExtensionId}/sidepanel.html)...`);
-    const spTargetRes = await fetch(`${cdpBase}/json/new`, { method: 'PUT' });
-    const spTarget = await spTargetRes.json();
-    
-    if (spTarget?.webSocketDebuggerUrl) {
-      const spState = await inspectTargetWs(spTarget.webSocketDebuggerUrl, 'sidepanel.html', `chrome-extension://${workingExtensionId}/sidepanel.html`, { requireDuckDb: false });
-      console.log(`  ✓ sidepanel.html rendered cleanly without exceptions (Title: "${spState.title}", text length: ${spState.bodyTextLength} chars)`);
-    }
-  } else {
-    console.log(`  ✓ Static manifest structure and production package verified for release.`);
+  // P0-3: fail closed — no working extension ID means the extension was never actually loaded.
+  if (!workingExtensionId || !wbState) {
+    throw new Error(
+      'Extension ID not verified in Chrome. The extension may not have loaded correctly. ' +
+      'Ensure the ZIP is valid and Chrome can load it as an unpacked extension.'
+    );
   }
 
+  if (wbState.duckdbState !== 'active') {
+    throw new Error(`DuckDB state is '${wbState.duckdbState}', expected 'active'. Workbench may have failed to initialize.`);
+  }
+
+  console.log(`  ✓ workbench.html rendered cleanly (Title: "${wbState.title}", DuckDB State: "${wbState.duckdbState}")`);
+
+  // 4. Test Side Panel Page
+  console.log(`\n📱 Testing Side Panel Page (chrome-extension://${workingExtensionId}/sidepanel.html)...`);
+  const spTargetRes = await fetch(`${cdpBase}/json/new`, { method: 'PUT' });
+  const spTarget = await spTargetRes.json();
+
+  if (!spTarget?.webSocketDebuggerUrl) {
+    throw new Error('Could not open a new CDP target for sidepanel.html verification.');
+  }
+
+  const spState = await inspectTargetWs(spTarget.webSocketDebuggerUrl, 'sidepanel.html', `chrome-extension://${workingExtensionId}/sidepanel.html`, { requireDuckDb: false });
+
+  if (!spState || !spState.hasRootChildren) {
+    throw new Error(`sidepanel.html did not render (empty #root). Extension may not have loaded.`);
+  }
+
+  console.log(`  ✓ sidepanel.html rendered cleanly without exceptions (Title: "${spState.title}", text length: ${spState.bodyTextLength} chars)`);
   console.log(`\n✅ Deep Chrome Smoke Test PASSED: Release ZIP v${version} installed, verified DuckDB ACTIVE, rendered UI pages, and ran with zero runtime exceptions or console errors.\n`);
 }
 

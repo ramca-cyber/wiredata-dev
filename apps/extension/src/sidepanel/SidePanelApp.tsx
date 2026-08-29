@@ -222,7 +222,9 @@ export function SidePanelApp() {
             }
 
             if (extractedRows.length > 0) {
-              const colKey = `${domain}:${cand.suggested_name}:${cand.pointer}`;
+              // M3: Use capture_mode + domain + route + pointer to prevent merging
+              // collections from different routes that share the same pointer path.
+              const colKey = `${cap.capture_mode}:${domain}:${cap.request.route_template || cap.request.sanitized_url}:${cand.pointer}`;
               const existing = itemsMap.get(colKey);
               const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
               const capturesCount = existing ? existing.capturesCount + 1 : 1;
@@ -253,8 +255,9 @@ export function SidePanelApp() {
 
   const attachCaptureCallback = (sessionId: ULID, wm: WorkspaceManager) => (
     capture: CapturedRequest,
-    rawBody: unknown,
-    candidates: CandidateCollection[]
+    parsedBody: unknown,
+    candidates: CandidateCollection[],
+    canonicalRawText?: string
   ) => {
     setCaptureCount(prev => prev + 1);
     setTotalBytes(prev => prev + (capture.response.body_size || 0));
@@ -265,11 +268,11 @@ export function SidePanelApp() {
       for (const cand of candidates) {
         let extractedRows: Record<string, any>[] = [];
         if (!cand.pointer || cand.pointer === '' || cand.pointer === '/') {
-          extractedRows = Array.isArray(rawBody) ? rawBody : [];
+          extractedRows = Array.isArray(parsedBody) ? parsedBody : [];
         } else {
           try {
             const ptrParts = cand.pointer.replace(/^\//, '').split('/');
-            let cur: any = rawBody;
+            let cur: any = parsedBody;
             for (const part of ptrParts) {
               if (cur && typeof cur === 'object') cur = cur[part];
             }
@@ -278,7 +281,8 @@ export function SidePanelApp() {
         }
 
         if (extractedRows.length > 0) {
-          const colKey = `${domain}:${cand.suggested_name}:${cand.pointer}`;
+          // M3: include capture_mode + route in key to prevent cross-route merging
+          const colKey = `${capture.capture_mode}:${domain}:${capture.request.route_template || capture.request.sanitized_url}:${cand.pointer}`;
           setDiscoveredItems(prev => {
             const existing = prev.find(x => x.id === colKey);
             const combinedRows = existing ? [...existing.rows, ...extractedRows] : extractedRows;
@@ -303,7 +307,11 @@ export function SidePanelApp() {
       }
     }
 
-    const writePromise = wm.saveCapture(sessionId, capture, rawBody)
+    // P0-1: persist canonicalRawText (the exact hashed bytes) not the re-serialized parsedBody.
+    // This preserves the SHA-256 content-addressing invariant:
+    //   sha256(readFile(`objects/${hash}.json`)) === capture.response.body_hash
+    const persistBody: unknown = canonicalRawText !== undefined ? canonicalRawText : parsedBody;
+    const writePromise = wm.saveCapture(sessionId, capture, persistBody)
       .finally(() => {
         pendingWritesRef.current.delete(writePromise);
       });
@@ -473,21 +481,21 @@ export function SidePanelApp() {
         return;
       }
 
-      // Request on-demand host permission for the active tab's origin if needed
+      // P0-2: permissions.request() must be the first async call after the user gesture
+      // to preserve the user-activation context. We use the pre-computed
+      // domainPermissionGranted state (set by checkDomainPermission when the tab syncs)
+      // and skip the async contains() check entirely inside the click handler.
       if (typeof chrome !== 'undefined' && chrome.permissions?.request && targetTab.url) {
         try {
           const parsed = new URL(targetTab.url);
           if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            const originPattern = `${parsed.origin}/*`;
-            const hasPermission = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
-            if (!hasPermission) {
+            if (domainPermissionGranted === false) {
+              const originPattern = `${parsed.origin}/*`;
               const granted = await chrome.permissions.request({ origins: [originPattern] }).catch(() => false);
               if (!granted) {
-                setStartError(`Host permission for ${parsed.hostname} was not granted.`);
+                setStartError(`Host permission for ${parsed.hostname} was not granted. Please click Allow when prompted.`);
                 return;
               }
-              setDomainPermissionGranted(true);
-            } else {
               setDomainPermissionGranted(true);
             }
           }
@@ -556,21 +564,18 @@ export function SidePanelApp() {
         return;
       }
 
-      // Request on-demand host permission for the active tab's origin if needed
+      // P0-2: same gesture-safe pattern as handleToggleCapture — request() is first async call.
       if (typeof chrome !== 'undefined' && chrome.permissions?.request && targetTab.url) {
         try {
           const parsed = new URL(targetTab.url);
           if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            const originPattern = `${parsed.origin}/*`;
-            const hasPermission = await chrome.permissions.contains({ origins: [originPattern] }).catch(() => false);
-            if (!hasPermission) {
+            if (domainPermissionGranted === false) {
+              const originPattern = `${parsed.origin}/*`;
               const granted = await chrome.permissions.request({ origins: [originPattern] }).catch(() => false);
               if (!granted) {
-                setScrapeStatus({ message: `Host permission for ${parsed.hostname} was not granted.`, tone: 'error' });
+                setScrapeStatus({ message: `Host permission for ${parsed.hostname} was not granted. Please click Allow when prompted.`, tone: 'error' });
                 return;
               }
-              setDomainPermissionGranted(true);
-            } else {
               setDomainPermissionGranted(true);
             }
           }
@@ -712,22 +717,11 @@ export function SidePanelApp() {
     setTimeout(() => setCopiedBadge(null), 2000);
   };
 
-  // 1-Click SQL Runner Jump
-  const handleJumpToSql = (item: DiscoveredItem) => {
-    const query = `SELECT * FROM ${item.name} LIMIT 50;`;
-    const targetUrl = chrome?.runtime?.getURL
-      ? chrome.runtime.getURL(`workbench.html?sql=${encodeURIComponent(query)}&tab=sql`)
-      : `/workbench.html?sql=${encodeURIComponent(query)}&tab=sql`;
-    if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
-      chrome.tabs.create({ url: targetUrl });
-    } else {
-      window.open(targetUrl, '_blank');
-    }
-  };
 
-  const handleClearAllItems = async () => {
+  // M2: Clear only the active session's captures (not historical sessions).
+  // Historical sessions in IndexedDB survive until explicitly cleared by handleClearHistory.
+  const handleClearCurrentSession = async () => {
     setDiscoveredItems([]);
-    setAllHistoryItems([]);
     setCaptureCount(0);
     setTotalBytes(0);
     setScrapeStatus(null);
@@ -740,6 +734,24 @@ export function SidePanelApp() {
         }
         await workspaceManager.gcOrphanedObjects();
       }
+    } catch {}
+  };
+
+  // M2: Clear all historical sessions (everything except the current active session).
+  const handleClearHistory = async () => {
+    setAllHistoryItems([]);
+    setPreviewItem(null);
+    try {
+      const sessions = await workspaceManager.listSessions();
+      const historical = sessions.filter(s => s.session_id !== activeSession?.session_id);
+      for (const sess of historical) {
+        const caps = await workspaceManager.listCaptures(sess.session_id);
+        for (const c of caps) {
+          await workspaceManager.deleteCapture(sess.session_id, c.capture_id);
+        }
+        await workspaceManager.deleteSession(sess.session_id);
+      }
+      await workspaceManager.gcOrphanedObjects();
     } catch {}
   };
 
@@ -978,8 +990,8 @@ export function SidePanelApp() {
 
               {visibleItems.length > 0 && (
                 <button
-                  onClick={handleClearAllItems}
-                  title="Clear dataset list"
+                  onClick={viewMode === 'history' ? handleClearHistory : handleClearCurrentSession}
+                  title={viewMode === 'history' ? 'Delete all historical sessions from storage' : 'Clear current session captures'}
                   style={{
                     background: 'transparent',
                     border: `1px solid ${colors.error}44`,
@@ -991,7 +1003,7 @@ export function SidePanelApp() {
                     cursor: 'pointer',
                   }}
                 >
-                  Clear All
+                  {viewMode === 'history' ? 'Clear History' : 'Clear Session'}
                 </button>
               )}
             </div>
@@ -1194,23 +1206,6 @@ export function SidePanelApp() {
                       }}
                     >
                       {copiedBadge === `${item.name}_ts` ? '✓' : 'TS'}
-                    </button>
-                    <button
-                      onClick={() => handleJumpToSql(item)}
-                      title="Query with SQL in Workbench"
-                      style={{
-                        background: `${colors.primary}18`,
-                        border: `1px solid ${colors.primary}44`,
-                        color: colors.primaryLight,
-                        borderRadius: 4,
-                        padding: '5px 4px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        textAlign: 'center',
-                      }}
-                    >
-                      ⚡ SQL
                     </button>
                   </div>
                 </div>

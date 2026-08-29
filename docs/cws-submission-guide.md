@@ -88,7 +88,7 @@ Even though all processing is 100% client-side and never leaves the device, Chro
 | :--- | :---: | :--- |
 | **Website Content** | **YES** | Intercepted JSON fetch/XHR API responses and extracted DOM table cell text are processed and stored strictly on the user's local device to enable developer inspection, schema inference, and SQL analysis. No data is transmitted to external servers. |
 | **Web Browsing Activity** | **YES** | Request endpoint URLs and target page URLs are recorded locally to provide provenance tracking and route grouping. Query parameters containing sensitive credentials (tokens, keys, secrets) and URL hash fragments are automatically sanitized before local storage. |
-| **Authentication Information** | **NO** | Authorization headers, Cookies, session tokens, and HTTP request bodies are never collected, inspected, or stored. |
+| **Authentication Information** | **NO** | Authorization headers, Cookies, and session tokens are never collected or stored. HTTP request bodies are not stored or transmitted. For GraphQL requests only, WireData transiently reads the locally-available request body to extract the `operationName` label; the body is immediately discarded in memory. |
 | **Personal Communications** | **NO** | Not handled or collected. |
 | **Location / Financial** | **NO** | Not handled or collected. |
 
@@ -118,6 +118,7 @@ Paste this into the **"Notes for the reviewer"** field (exact length: 479 charac
 Test in 1 min:
 1. Open https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html
 2. Click toolbar icon (W) to open Side Panel -> Click "Start Capture".
+   Chrome may show a domain access prompt — click "Allow" to grant access to this test page.
 3. Click "Generate JSON API Request" on page -> "orders" appears. Click TS/JSONL for instant export.
 4. Stop Capture -> Click "Open Full SQL Workbench" -> Candidates -> "Extract Combined Dataset" -> DuckDB SQL -> Run Query.
 5. All capture & DuckDB SQL run 100% locally on device. Zero data is sent to external servers.
@@ -138,7 +139,9 @@ WireData is a local-only developer workbench for inspecting JSON traffic and HTM
 2. Click the WireData extension icon in the browser toolbar to open the Side Panel.
    (Notice the target tab card immediately binds to the active reviewer page).
 
-3. In the Side Panel, click "⏺ Start Capture" (REC status appears).
+3. In the Side Panel, click "⏺ Start Capture".
+   — Chrome may display a native domain access prompt: "Allow WireData to access data on [this site]?" Click **Allow**.
+   — REC status appears once capture is active.
 
 4. On the reviewer test page, click "🚀 Generate JSON API Request".
    - Notice the Side Panel immediately increments to 1 response and detects the "orders" collection.

@@ -170,7 +170,7 @@
     <h3>C. Authentication & Request Credentials</h3>
     <ul>
       <li><strong>Request Authentication Headers:</strong> Headers such as <code>Authorization</code>, <code>Cookie</code>, and custom session tokens are <strong>never stored</strong>.</li>
-      <li><strong>Request Bodies:</strong> HTTP request payloads and request bodies are <strong>never collected, inspected, or stored</strong>. GraphQL operation names are derived solely from standard URL query parameters (e.g., <code>?operationName=...</code>) without reading request payloads.</li>
+      <li><strong>Request Bodies:</strong> HTTP request bodies are <strong>not stored or transmitted</strong>. For GraphQL requests only, WireData may transiently read the locally-available request body to extract the <code>operationName</code> field for dataset labelling purposes. The body itself is immediately discarded in memory and is never persisted, logged, or transmitted remotely.</li>
     </ul>
   </section>
 
@@ -226,6 +226,8 @@
       <li><code>scripting</code> — Injects the temporary MAIN-world JSON capture hook and DOM table extractor into the active tab upon your explicit request.</li>
       <li><code>sidePanel</code> — Displays the companion capture and dataset controller UI.</li>
       <li><code>storage</code> — Manages ephemeral session state and directory handle persistence in IndexedDB.</li>
+      <li><code>tabs</code> — Reads the URL and hostname of your active browser tab when the side panel opens, enabling domain-aware dataset grouping. WireData does not monitor your browsing history.</li>
+      <li><code>optional_host_permissions</code> (<code>http://*/*</code>, <code>https://*/*</code>) — Requested on-demand, per site, only when you explicitly click <strong>Start Capture</strong> or <strong>Scrape Table</strong>. Zero host permissions are granted on installation. Chrome displays a native prompt for each new domain before access begins.</li>
     </ul>
   </section>
 
