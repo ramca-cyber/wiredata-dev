@@ -26,7 +26,7 @@ describe('Workspace Storage & Serialization', () => {
     const metadata = await manager.getMetadata();
     expect(metadata).not.toBeNull();
     expect(metadata?.format_version).toBe(1);
-    expect(metadata?.application_version).toBe('0.2.0');
+    expect(metadata?.application_version).toBe('0.2.1');
   });
 
   it('saves and lists capture sessions', async () => {
@@ -315,7 +315,7 @@ describe('Workspace Storage & Serialization', () => {
   });
 
   it('P0-1: canonical content-addressing — stored bytes equal the string passed to saveCapture', async () => {
-    // When the page adapter passes canonicalRawText (a string) to saveCapture,
+    // When the adapter passes canonicalRawText (a string) to saveCapture,
     // the object stored under body_hash must be exactly those bytes.
     // sha256(readFile(`objects/${hash}.json`)) must equal capture.response.body_hash.
     //
@@ -323,12 +323,16 @@ describe('Workspace Storage & Serialization', () => {
     // when rawBody is already a string, preserving the content-addressing invariant.
 
     const sessionId = generateULID();
-    // Deliberately craft a canonical raw string that would differ from JSON.stringify(parsed)
-    // (extra spacing, preserving insertion order, etc.)
-    const canonicalRawText = '{"data":[{"id":1,"name":"Alice"}],"meta":{"total":1}}';
-    const parsed = JSON.parse(canonicalRawText); // round-trips to different spacing
+    // Deliberately craft a canonical raw string with custom spacing and precision
+    // that demonstrably differs from JSON.stringify(JSON.parse(...))
+    const canonicalRawText = '{\n  "data": [\n    { "id": 1, "value": 1.0000 }\n  ],\n  "meta": { "total": 1 }\n}';
+    const parsed = JSON.parse(canonicalRawText);
+    const roundTripped = JSON.stringify(parsed);
 
-    // Compute expected hash (same algorithm as sha256 util — SHA-256 of the canonical string)
+    // Verify that re-serialization genuinely changes the raw string
+    expect(roundTripped).not.toBe(canonicalRawText);
+
+    // Compute expected hash (SHA-256 of the canonical string)
     const encoder = new TextEncoder();
     const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(canonicalRawText));
     const bodyHash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -362,21 +366,19 @@ describe('Workspace Storage & Serialization', () => {
       },
     };
 
-    // Persist canonical raw text (as the page adapter now does after P0-1 fix)
+    // Persist canonical raw text (as page and devtools adapters do)
     await manager.saveCapture(sessionId, capture, canonicalRawText);
 
     // Read raw stored bytes via the adapter directly
     const storedRaw = await adapter.readFile(`objects/${bodyHash}.json`);
     expect(storedRaw).not.toBeNull();
 
-    // The stored bytes must be the canonical string exactly, not JSON.stringify(parsed)
+    // The stored bytes must be the canonical string exactly, NOT the altered roundTripped JSON
     expect(storedRaw).toBe(canonicalRawText);
+    expect(storedRaw).not.toBe(roundTripped);
 
-    // Confirm the stored bytes differ from a re-serialized round-trip (proving the fix matters)
-    const roundTripped = JSON.stringify(parsed);
-    // Note: this assertion documents that the canonical and re-serialized forms CAN differ.
-    // It will be true whenever the server uses non-standard spacing or key ordering.
-    // (For this test payload they happen to be equal; the key invariant is storedRaw === canonicalRawText)
-    expect(storedRaw).toBe(canonicalRawText); // The invariant: not re-serialized
+    // getBodyObject still returns the parsed object correctly for consumption
+    const retrievedObj = await manager.getBodyObject(bodyHash);
+    expect(retrievedObj).toEqual(parsed);
   });
 });

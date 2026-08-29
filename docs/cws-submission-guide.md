@@ -1,7 +1,7 @@
 # Chrome Web Store Submission & Reviewer Package
 
-**Version:** 0.2.0  
-**Package Artifact:** `release/wiredata-extension-v0.2.0.zip`  
+**Version:** 0.2.1  
+**Package Artifact:** `release/wiredata-extension-v0.2.1.zip`  
 **Live Privacy Policy:** `https://ramca-cyber.github.io/wiredata-dev/privacy.html`  
 **Live Reviewer Test Page:** `https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html`
 
@@ -86,11 +86,11 @@ Even though all processing is 100% client-side and never leaves the device, Chro
 
 | Data Category | Declared? | Justification / Description |
 | :--- | :---: | :--- |
-| **Website Content** | **YES** | Intercepted JSON fetch/XHR API responses and extracted DOM table cell text are processed and stored strictly on the user's local device to enable developer inspection, schema inference, and SQL analysis. No data is transmitted to external servers. |
+| **Website Content** | **YES** | Intercepted JSON fetch/XHR API responses and extracted DOM table cell text are processed and stored strictly on the user's local device to enable developer inspection, schema inference, and SQL analysis. No data is transmitted to external servers. Captured response bodies may contain data returned by the inspected website. |
 | **Web Browsing Activity** | **YES** | Request endpoint URLs and target page URLs are recorded locally to provide provenance tracking and route grouping. Query parameters containing sensitive credentials (tokens, keys, secrets) and URL hash fragments are automatically sanitized before local storage. |
-| **Authentication Information** | **NO** | Authorization headers, Cookies, and session tokens are never collected or stored. HTTP request bodies are not stored or transmitted. For GraphQL requests only, WireData transiently reads the locally-available request body to extract the `operationName` label; the body is immediately discarded in memory. |
-| **Personal Communications** | **NO** | Not handled or collected. |
-| **Location / Financial** | **NO** | Not handled or collected. |
+| **Authentication Information** | **NO** | Authorization headers, Cookies, and session tokens are never collected or stored. Request bodies are not stored or transmitted; for GraphQL only, the operationName is transiently read in memory to label datasets and immediately discarded. |
+| **Personal Communications** | **NO** | Not targeted or collected as a category. |
+| **Location / Financial** | **NO** | Not targeted or collected as a category. |
 
 ### B. Remote Code Declaration
 ```text
@@ -112,16 +112,10 @@ Check the following mandatory certification checkboxes in the CWS dashboard:
 
 ## 4. Instructions for the Chrome Web Store Reviewer (Under 500 Chars)
 
-Paste this into the **"Notes for the reviewer"** field (exact length: 479 characters):
+Paste this into the **"Notes for the reviewer"** field (exact length: 377 characters):
 
 ```text
-Test in 1 min:
-1. Open https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html
-2. Click toolbar icon (W) to open Side Panel -> Click "Start Capture".
-   Chrome may show a domain access prompt — click "Allow" to grant access to this test page.
-3. Click "Generate JSON API Request" on page -> "orders" appears. Click TS/JSONL for instant export.
-4. Stop Capture -> Click "Open Full SQL Workbench" -> Candidates -> "Extract Combined Dataset" -> DuckDB SQL -> Run Query.
-5. All capture & DuckDB SQL run 100% locally on device. Zero data is sent to external servers.
+Test: Open https://ramca-cyber.github.io/wiredata-dev/reviewer-test.html. Click toolbar W, then Start Capture; if Chrome asks for site access, click Allow. Click Generate JSON API Request; "orders" appears. Stop Capture -> Workbench -> Candidates -> Extract Combined Dataset -> DuckDB SQL -> Run Query. All processing and storage are local; WireData sends no data off-device.
 ```
 
 ---

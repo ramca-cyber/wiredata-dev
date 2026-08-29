@@ -209,8 +209,9 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const [sqlResult, setSqlResult] = useState<{ columns: string[]; rows: any[]; durationMs: number } | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
 
-  // Adapter ref
+  // Adapter & persistence refs
   const adapterRef = useRef<ChromeNetworkCaptureAdapter | null>(null);
+  const pendingWritesRef = useRef<Set<Promise<unknown>>>(new Set());
 
   const handleCopyCurl = (capture: CapturedRequest) => {
     const cmd = generateCurlCommand(capture);
@@ -340,7 +341,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
         } catch {}
       }
 
-      const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.1.6';
+      const appVersion = typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.2.1';
       const freshSession: CaptureSession = {
         session_id: sessionId,
         name: 'Active Capture Session',
@@ -419,7 +420,8 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
   const ingestCapturedData = (
     capture: CapturedRequest,
     rawBody?: unknown,
-    candidates?: CandidateCollection[]
+    candidates?: CandidateCollection[],
+    canonicalRawText?: string
   ) => {
     setCaptures(prev => [capture, ...prev]);
 
@@ -432,24 +434,45 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
     }
 
     if (activeSession) {
-      workspaceManager.saveCapture(activeSession.session_id, capture, rawBody);
+      // Persist canonical raw text (what was hashed) to maintain content-addressing invariant
+      const persistBody = canonicalRawText !== undefined ? canonicalRawText : rawBody;
+      const writePromise = workspaceManager.saveCapture(activeSession.session_id, capture, persistBody)
+        .finally(() => {
+          pendingWritesRef.current.delete(writePromise);
+        });
+      pendingWritesRef.current.add(writePromise);
     }
   };
 
   // Toggle Deep Capture in DevTools Mode
-  const toggleCapture = () => {
+  const toggleCapture = async () => {
     if (isCapturing) {
-      adapterRef.current?.stop();
+      if (adapterRef.current) {
+        adapterRef.current.stop();
+        adapterRef.current = null;
+      }
+      if (pendingWritesRef.current.size > 0) {
+        await Promise.allSettled(Array.from(pendingWritesRef.current));
+      }
       setIsCapturing(false);
       if (activeSession) {
-        workspaceManager.saveSession({ ...activeSession, status: 'complete', ended_at: new Date().toISOString() });
+        await workspaceManager.saveSession({
+          ...activeSession,
+          status: 'complete',
+          ended_at: new Date().toISOString(),
+          capture_count: captures.length,
+        });
       }
     } else {
       if (!activeSession) return;
+      await workspaceManager.saveSession({
+        ...activeSession,
+        status: 'capturing',
+      });
       const adapter = new ChromeNetworkCaptureAdapter(
         activeSession.session_id,
-        (capture, rawBody, candidates) => {
-          ingestCapturedData(capture, rawBody, candidates);
+        (capture, rawBody, candidates, canonicalRawText) => {
+          ingestCapturedData(capture, rawBody, candidates, canonicalRawText);
         }
       );
       adapter.start();
@@ -729,7 +752,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
       navigation_history: [],
       capture_count: 0,
       body_bytes: 0,
-      application_version: '0.2.0',
+      application_version: '0.2.1',
       status: 'complete',
     };
     setActiveSession(newSession);
@@ -889,7 +912,7 @@ export function WorkbenchApp({ hostMode }: WorkbenchAppProps) {
             Network Data Workbench
           </span>
           <span style={{ fontSize: 11, color: colors.textDim, fontFamily: fonts.mono }}>
-            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.2.0'}
+            v{typeof chrome !== 'undefined' && chrome.runtime?.getManifest ? chrome.runtime.getManifest().version : '0.2.1'}
           </span>
           <span
             data-testid="duckdb-status"

@@ -27,8 +27,9 @@ import {
 
 export type NetworkCaptureCallback = (
   capture: CapturedRequest,
-  rawBody?: unknown,
-  candidates?: ReturnType<typeof detectCandidateCollections>
+  parsedBody?: unknown,
+  candidates?: ReturnType<typeof detectCandidateCollections>,
+  canonicalRawText?: string
 ) => void;
 
 export class ChromeNetworkCaptureAdapter {
@@ -143,7 +144,7 @@ export class ChromeNetworkCaptureAdapter {
         candidates = detectCandidateCollections(rawJson);
       }
 
-      this.onCapture(capture, rawJson, candidates);
+      this.onCapture(capture, rawJson, candidates, rawText);
     });
   }
 }
