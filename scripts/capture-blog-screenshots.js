@@ -150,81 +150,13 @@ async function captureScreenshots() {
     throw new Error('Chrome CDP did not become responsive on port 9223.');
   }
 
-  // 1. Find extension ID
-  let extensionId = null;
-  const BUILTIN_IDS = ['nkeimhogjdpnpccoofpliimaahmaaome', 'fignfifoniblkonapihmkfakmlgkbkcf', 'pkedcjkdefgpdelpbcmbmeomcjbeemfm'];
-  for (let poll = 0; poll < 20; poll++) {
-    try {
-      const listRes = await fetch(`${cdpBase}/json/list`);
-      const allTargets = await listRes.json();
-      for (const t of allTargets) {
-        const match = t.url?.match(/chrome-extension:\/\/([a-z0-9]+)/);
-        if (match && !BUILTIN_IDS.includes(match[1])) {
-          extensionId = match[1];
-          break;
-        }
-      }
-    } catch {}
-    if (extensionId) break;
-    await new Promise(r => setTimeout(r, 200));
-  }
-
-  // Path fallback
-  if (!extensionId) {
-    const rawPath = path.resolve(smokeDir);
-    const variants = [rawPath.charAt(0).toUpperCase() + rawPath.slice(1), rawPath.charAt(0).toLowerCase() + rawPath.slice(1)];
-    for (const v of variants) {
-      const h = crypto.createHash('sha256').update(v).digest();
-      let id = '';
-      for (let i = 0; i < 16; i++) {
-        id += String.fromCharCode(97 + (h[i] >> 4)) + String.fromCharCode(97 + (h[i] & 0x0f));
-      }
-      extensionId = id;
-      break;
-    }
-  }
-
-  console.log(`  ✓ Extension ID discovered: ${extensionId}`);
+  const baseUrl = 'http://localhost:8081';
+  console.log(`  ✓ Using local server at: ${baseUrl}`);
 
   // -------------------------------------------------------------
-  // SCREENSHOT 1: Side Panel Companion UI (420 x 780)
+  // SCREENSHOT 2: Workbench - Captures View (1440 x 900)
   // -------------------------------------------------------------
-  console.log('📱 Capturing Screenshot 1: Side Panel UI...');
-  const spTargetRes = await fetch(`${cdpBase}/json/new`, { method: 'PUT' });
-  const spTarget = await spTargetRes.json();
-  const { ws: spWs, send: spSend } = await connectWs(spTarget.webSocketDebuggerUrl);
-
-  await spSend('Page.enable');
-  await spSend('Runtime.enable');
-  await spSend('Emulation.setDeviceMetricsOverride', {
-    width: 440,
-    height: 760,
-    deviceScaleFactor: 2,
-    mobile: false,
-  });
-  await spSend('Page.navigate', { url: `chrome-extension://${extensionId}/sidepanel.html` });
-  await new Promise(r => setTimeout(r, 1500));
-
-  // Populate mock discovered items into sidepanel state for rich visual representation
-  await spSend('Runtime.evaluate', {
-    expression: `
-      // Inject sample state if available
-      const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('Simulate') || b.textContent?.includes('Start'));
-      console.log('Side panel rendered');
-    `
-  });
-  await new Promise(r => setTimeout(r, 500));
-
-  const spShot = await spSend('Page.captureScreenshot', { format: 'png' });
-  const spFile = path.join(outDir, '01-wiredata-sidepanel.png');
-  fs.writeFileSync(spFile, Buffer.from(spShot.data, 'base64'));
-  console.log(`  ✓ Saved: ${spFile}`);
-  spWs.close();
-
-  // -------------------------------------------------------------
-  // SCREENSHOT 2: Workbench - Datasets & Candidate Extraction (1440 x 900)
-  // -------------------------------------------------------------
-  console.log('📊 Capturing Screenshot 2: Workbench UI & Datasets...');
+  console.log('📊 Capturing Screenshot 2: Workbench UI & Captures...');
   const wbTargetRes = await fetch(`${cdpBase}/json/new`, { method: 'PUT' });
   const wbTarget = await wbTargetRes.json();
   const { ws: wbWs, send: wbSend } = await connectWs(wbTarget.webSocketDebuggerUrl);
@@ -237,17 +169,20 @@ async function captureScreenshots() {
     deviceScaleFactor: 2,
     mobile: false,
   });
-  await wbSend('Page.navigate', { url: `chrome-extension://${extensionId}/workbench.html` });
+  await wbSend('Page.navigate', { url: `${baseUrl}/workbench.html` });
   await new Promise(r => setTimeout(r, 2000));
 
-  // Click Simulate Fixture Traffic button to populate real realistic sample data
+  // Click Load Sample Data button
   await wbSend('Runtime.evaluate', {
     expression: `
       (async () => {
-        const simBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Simulate'));
-        if (simBtn) {
-          simBtn.click();
-          await new Promise(r => setTimeout(r, 800));
+        for (let i = 0; i < 20; i++) {
+          const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Load Sample Data'));
+          if (btn) {
+            btn.click();
+            break;
+          }
+          await new Promise(r => setTimeout(r, 100));
         }
       })();
     `
@@ -260,42 +195,48 @@ async function captureScreenshots() {
   console.log(`  ✓ Saved: ${wbFile1}`);
 
   // -------------------------------------------------------------
-  // SCREENSHOT 3: DuckDB Analytical SQL Runner
+  // SCREENSHOT 3: DuckDB Analytical SQL Runner with Results (1440 x 900)
   // -------------------------------------------------------------
   console.log('⚡ Capturing Screenshot 3: DuckDB SQL Query Results...');
   await wbSend('Runtime.evaluate', {
     expression: `
       (async () => {
-        // 1. Switch to Candidates tab
-        const tabs = Array.from(document.querySelectorAll('button'));
-        const candTab = tabs.find(b => b.textContent && b.textContent.includes('Candidates'));
-        if (candTab) {
-          candTab.click();
-          await new Promise(r => setTimeout(r, 500));
+        // 1. Click Candidates tab
+        const candBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Candidates'));
+        if (candBtn) {
+          candBtn.click();
+          await new Promise(r => setTimeout(r, 800));
           // Click Extract Combined Dataset
           const extractBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Extract Combined'));
           if (extractBtn) {
             extractBtn.click();
-            await new Promise(r => setTimeout(r, 800));
+            await new Promise(r => setTimeout(r, 1000));
           }
         }
 
-        // 2. Switch to SQL tab
-        const sqlTab = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('DuckDB SQL'));
+        // 2. Click SQL Workspace tab
+        const sqlTab = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('SQL Workspace'));
         if (sqlTab) {
           sqlTab.click();
-          await new Promise(r => setTimeout(r, 800));
-          // Click Run Query
-          const runBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Run Query'));
+          await new Promise(r => setTimeout(r, 1000));
+          
+          // Set an interesting SQL query in textarea
+          const ta = document.querySelector('textarea');
+          if (ta) {
+            ta.value = "SELECT status, count(*) AS total_orders, round(avg(total_amount), 2) AS avg_amount, round(sum(total_amount), 2) AS gross_sales\\nFROM orders\\nGROUP BY status\\nORDER BY gross_sales DESC;";
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+
+          // Click Run SQL
+          const runBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Run SQL'));
           if (runBtn) {
             runBtn.click();
-            await new Promise(r => setTimeout(r, 800));
           }
         }
       })();
     `
   });
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise(r => setTimeout(r, 3000));
 
   const wbShot2 = await wbSend('Page.captureScreenshot', { format: 'png' });
   const wbFile2 = path.join(outDir, '03-wiredata-duckdb-sql.png');
@@ -303,28 +244,75 @@ async function captureScreenshots() {
   console.log(`  ✓ Saved: ${wbFile2}`);
 
   // -------------------------------------------------------------
-  // SCREENSHOT 4: Datasets Explorer Tab
+  // SCREENSHOT 4: Datasets Explorer Table (1440 x 900)
   // -------------------------------------------------------------
   console.log('📁 Capturing Screenshot 4: Datasets Explorer Table...');
   await wbSend('Runtime.evaluate', {
     expression: `
       (async () => {
-        const dsTab = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Datasets'));
-        if (dsTab) {
-          dsTab.click();
-          await new Promise(r => setTimeout(r, 800));
+        // Find sidebar dataset button
+        const allElements = Array.from(document.querySelectorAll('*'));
+        const orderBtn = allElements.find(el => el.textContent === 'orders' && el.parentElement?.textContent?.includes('300'));
+        if (orderBtn) {
+          orderBtn.click();
+        } else {
+          const dsBtn = Array.from(document.querySelectorAll('button, div')).find(el => el.textContent && el.textContent.includes('orders') && el.textContent.includes('300'));
+          if (dsBtn) dsBtn.click();
         }
       })();
     `
   });
-  await new Promise(r => setTimeout(r, 1200));
+  await new Promise(r => setTimeout(r, 2000));
 
   const wbShot3 = await wbSend('Page.captureScreenshot', { format: 'png' });
   const wbFile3 = path.join(outDir, '04-wiredata-datasets-explorer.png');
   fs.writeFileSync(wbFile3, Buffer.from(wbShot3.data, 'base64'));
   console.log(`  ✓ Saved: ${wbFile3}`);
-
   wbWs.close();
+
+  // -------------------------------------------------------------
+  // SCREENSHOT 1: Side Panel Companion UI (440 x 780)
+  // -------------------------------------------------------------
+  console.log('📱 Capturing Screenshot 1: Side Panel UI with Discovered Collections...');
+  const spTargetRes = await fetch(`${cdpBase}/json/new`, { method: 'PUT' });
+  const spTarget = await spTargetRes.json();
+  const { ws: spWs, send: spSend } = await connectWs(spTarget.webSocketDebuggerUrl);
+
+  await spSend('Page.enable');
+  await spSend('Runtime.enable');
+  await spSend('Emulation.setDeviceMetricsOverride', {
+    width: 440,
+    height: 780,
+    deviceScaleFactor: 2,
+    mobile: false,
+  });
+  await spSend('Page.navigate', { url: `${baseUrl}/sidepanel.html` });
+  await new Promise(r => setTimeout(r, 2000));
+
+  await spSend('Runtime.evaluate', {
+    expression: `
+      (async () => {
+        for (let i = 0; i < 20; i++) {
+          if (document.getElementById('root')?.childElementCount > 0) break;
+          await new Promise(r => setTimeout(r, 100));
+        }
+
+        // Simulate click on start capture or render cards
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const startBtn = buttons.find(b => b.textContent && b.textContent.includes('Start Capture'));
+        if (startBtn) {
+          startBtn.click();
+        }
+      })();
+    `
+  });
+  await new Promise(r => setTimeout(r, 1500));
+
+  const spShot = await spSend('Page.captureScreenshot', { format: 'png' });
+  const spFile = path.join(outDir, '01-wiredata-sidepanel.png');
+  fs.writeFileSync(spFile, Buffer.from(spShot.data, 'base64'));
+  console.log(`  ✓ Saved: ${spFile}`);
+  spWs.close();
   console.log('\n🎉 All portfolio screenshots captured successfully in blog/assets/!\n');
 }
 
